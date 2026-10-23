@@ -16,10 +16,10 @@ This skill **ships the full Mirror AI app**. Other developers install it once;
 **Install (once per machine):**
 
 ```bash
-npx skills add Wilson-Daniel-30/mirror-ai-skills@mirror-ai -g -y
+npx skills add paytm/mirror-ai-skills@mirror-ai -g -y
 ```
 
-https://github.com/Wilson-Daniel-30/mirror-ai-skills · https://skills.sh/
+https://github.com/paytm/mirror-ai-skills · https://skills.sh/
 
 ## When to use
 
@@ -42,7 +42,7 @@ Do **not** ask the user to clone or unzip anything. Run the skill’s start scri
 
    If nothing is found, tell the user to install:
 
-   `npx skills add Wilson-Daniel-30/mirror-ai-skills@mirror-ai -g -y`
+   `npx skills add paytm/mirror-ai-skills@mirror-ai -g -y`
 
    then run step 2 again.
 
