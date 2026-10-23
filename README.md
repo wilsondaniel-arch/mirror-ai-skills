@@ -5,7 +5,7 @@
 ## Install (other developers)
 
 ```bash
-npx skills add paytm/mirror-ai-skills@mirror-ai -g -y
+npx skills add wilsondaniel-arch/mirror-ai-skills@mirror-ai -g -y
 ```
 
 Then in Cursor (or any supported agent): type **`/mirror-ai`**. The agent runs `scripts/start.sh`, which:
@@ -25,9 +25,9 @@ mirror-ai/
   app/              # Full Mirror AI source (no node_modules)
 ```
 
-## First-time publish (Paytm GitHub)
+## First-time publish (GitHub)
 
-Log in with an account that can **create repos** on the Paytm org (or your Paytm GitHub user):
+Log in as **wilsondaniel-arch** (or set `SKILL_REPO_OWNER`):
 
 ```bash
 gh auth login   # or: gh auth switch
@@ -46,7 +46,7 @@ To drop the old personal repo after Paytm is live:
 DELETE_OLD_PERSONAL_REPO=1 ./scripts/publish-skill-repo.sh
 ```
 
-Override owner if needed: `SKILL_REPO_OWNER=your-paytm-user ./scripts/publish-skill-repo.sh`
+Override owner if needed: `SKILL_REPO_OWNER=other-user ./scripts/publish-skill-repo.sh`
 
 ## Publish updates
 

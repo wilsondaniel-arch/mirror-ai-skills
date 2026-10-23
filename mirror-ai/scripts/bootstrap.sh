@@ -6,7 +6,7 @@ INSTALL="${MIRROR_AI_HOME:-$HOME/.mirror-ai}"
 BUNDLE="$SKILL_ROOT/app"
 
 if [ ! -f "$BUNDLE/package.json" ]; then
-  echo "ERROR: This skill is missing app/ — reinstall with: npx skills add paytm/mirror-ai-skills@mirror-ai -g -y"
+  echo "ERROR: This skill is missing app/ — reinstall with: npx skills add wilsondaniel-arch/mirror-ai-skills@mirror-ai -g -y"
   exit 1
 fi
 
