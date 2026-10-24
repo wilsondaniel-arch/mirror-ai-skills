@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mirror-ai",
+  "version": "1.0.0",
+  "description": "Android vs iOS comparison UI with module and whole-repo audits. Invoke /mirror-ai to bootstrap and open the local Mirror AI app.",
+  "author": {
+    "name": "wilsondaniel-arch",
+    "url": "https://github.com/wilsondaniel-arch"
+  },
+  "homepage": "https://github.com/wilsondaniel-arch/mirror-ai-skills",
+  "repository": "https://github.com/wilsondaniel-arch/mirror-ai-skills",
+  "license": "MIT",
+  "keywords": [
+    "mirror-ai",
+    "android",
+    "ios",
+    "mobile",
+    "comparison",
+    "audit",
+    "parity"
+  ],
+  "skills": "mirror-ai"
+}

@@ -99,3 +99,15 @@ npx skills update mirror-ai -g -y
 ## skills.sh
 
 Public GitHub repos are installable via `npx skills add`. Listing on [skills.sh](https://skills.sh/) grows with installs and search — there is no separate upload form.
+
+## Cursor Marketplace
+
+This repo is packaged as a **Cursor / Agent Plugin** (`plugin.json` and `.cursor-plugin/plugin.json`).
+
+1. **Install locally (test before submit):** Cursor → **Customize** → search **mirror-ai**, or install from Git once listed.
+2. **Submit for listing:** [cursor.com/marketplace/publish](https://cursor.com/marketplace/publish) — paste  
+   `https://github.com/wilsondaniel-arch/mirror-ai-skills`  
+   Cursor manually reviews open-source plugins before they appear in the marketplace.
+3. **Usage:** After install, invoke **`/mirror-ai`** in Agent chat (see `mirror-ai/SKILL.md`).
+
+**Teams / Enterprise:** You can also publish from **Customize → Skills** → your personal **mirror-ai** skill → **Publish** to your team’s Default marketplace (no public review).
