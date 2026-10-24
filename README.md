@@ -27,11 +27,41 @@ mirror-ai/
 
 ## First-time publish (GitHub)
 
-Log in as **wilsondaniel-arch** (or set `SKILL_REPO_OWNER`):
+### Fine-grained PAT only (wilsondaniel-arch)
 
-```bash
-gh auth login   # or: gh auth switch
-```
+Fine-grained tokens **cannot** run `gh repo create` — create the repo in the UI first, then grant **write** on that repo.
+
+1. **Create empty repo** (no README):  
+   [github.com/new?name=mirror-ai-skills&visibility=public](https://github.com/new?name=mirror-ai-skills&visibility=public)  
+   Owner: **wilsondaniel-arch**
+
+2. **Token** → GitHub **Settings → Developer settings → Fine-grained personal access tokens** → your token (or create one):
+   - **Repository access:** Only select repositories → **mirror-ai-skills**
+   - **Repository permissions:**
+     - **Contents:** Read and write *(required for `git push`)*
+     - **Metadata:** Read-only *(default)*
+   - Optional later: **Administration:** Read and write *(only if you use `DELETE_OLD_PERSONAL_REPO=1` to delete the old repo via `gh`)*
+
+3. **Point `gh` at that token** (paste the `github_pat_...` value when prompted):
+
+   ```bash
+   gh auth logout -h github.com -u wilsondaniel-arch
+   gh auth login -h github.com -p https
+   # Choose: Paste an authentication token
+   gh auth setup-git -h github.com
+   ```
+
+4. **Push** from the Mirror AI project:
+
+   ```bash
+   PUSH_ONLY=1 ./scripts/publish-skill-repo.sh
+   ```
+
+If push still returns **403**, the token is missing **Contents: Read and write** on `mirror-ai-skills`, or `gh` is still using another account (`gh auth status`).
+
+### Browser login (alternative)
+
+`gh auth login -h github.com -w` uses an OAuth token (`gho_...`) with broader scopes if you prefer not to manage PAT permissions.
 
 From the main **Mirror AI** project:
 
