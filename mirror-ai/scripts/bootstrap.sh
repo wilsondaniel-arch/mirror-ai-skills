@@ -31,14 +31,5 @@ rsync -a --delete \
 
 cd "$INSTALL"
 chmod +x setup.sh scripts/*.sh 2>/dev/null || true
-
-if [ ! -d node_modules ]; then
-  echo "Running first-time setup (npm install)…"
-  npm install --no-fund --no-audit
-fi
-mkdir -p .cache/repos "generated reports"
-if [ ! -f .env ] && [ -f .env.example ]; then
-  cp .env.example .env
-fi
-
+./setup.sh --yes --skip-tests
 echo "$INSTALL"

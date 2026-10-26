@@ -1,0 +1,17 @@
+---
+description: Mirror AI — run from Cursor with Opus 5.5 audits
+globs:
+alwaysApply: true
+---
+
+# Mirror AI in Cursor
+
+When the user wants Mirror AI (comparison UI, module audits, `/mirror-ai`):
+
+1. Use the **local repo** skill at `.claude/skills/mirror-ai/SKILL.md` (not `~/.mirror-ai` unless they explicitly use the marketplace install).
+2. Start with `npm run serve` from the project root in a **background** terminal so `CURSOR_AGENT` is set.
+3. First time on a machine: run `./setup.sh --yes` (or let `bootstrap.sh` / `start-ui.sh` do it). No Anthropic API key prompts.
+4. Audits use the **Cursor `agent` CLI** with **Claude Opus 5.5** after one-time `agent login`.
+5. Open **http://127.0.0.1:4173/** for the UI.
+
+Override with `MIRROR_AI_RUNNER`, `MIRROR_AI_CURSOR_MODEL`, or legacy `claude` / API keys in `.env` if needed.

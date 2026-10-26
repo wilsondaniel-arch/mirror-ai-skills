@@ -167,6 +167,9 @@ button.secondary {
 .differences-head h2 { margin: 0; flex: 1; min-width: 0; }
 #download-pdf[hidden] { display: none; }
 #download-pdf:disabled { opacity: 0.55; cursor: progress; }
+#export-note { margin: 0 0 12px; }
+#export-note a { color: var(--accent); font-weight: 600; }
+#export-note code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 
 
 label.checkbox {
@@ -734,7 +737,7 @@ section.pass {
   html, body { background: #fff; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   main { width: auto; margin: 0; }
-  main > header, #repo-form, #modules-step, #status, #error, #download-pdf { display: none !important; }
+  main > header, #repo-form, #modules-step, #status, #error, #download-pdf, #export-note { display: none !important; }
   section#differences-step { border: 0; padding: 0; margin: 0; background: none; }
   .differences-head { position: static; border: 0; margin: 0 0 8px; padding: 0; }
 

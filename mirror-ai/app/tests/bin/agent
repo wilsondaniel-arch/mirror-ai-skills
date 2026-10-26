@@ -1,0 +1,15 @@
+#!/bin/bash
+# Stands in for the Cursor Agent CLI in tests.
+if [[ "$1" == "--version" ]] || [[ "$1" == "-v" ]]; then
+  echo "0.0.0-stub (Cursor Agent)"
+  exit 0
+fi
+if [[ "$1" == "status" ]] || [[ "$1" == "whoami" ]]; then
+  echo "Logged in as test@example.com"
+  exit 0
+fi
+export MIRROR_AI_CURSOR_AGENT_LOG="${MIRROR_AI_CURSOR_AGENT_LOG:-/tmp/mirror-ai-agent.log}"
+node -e 'require("fs").writeFileSync(process.env.MIRROR_AI_CURSOR_AGENT_LOG, JSON.stringify(process.argv.slice(1)))' -- "$@"
+printf '%s' "### 1. Executive Summary
+
+Stub audit of the Catalog module."

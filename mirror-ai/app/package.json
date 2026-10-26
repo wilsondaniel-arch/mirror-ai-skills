@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/compare.test.ts tests/workflow.test.ts tests/enums.test.ts tests/source.test.ts tests/render.test.ts tests/skills.test.ts tests/report-store.test.ts tests/screenshots.test.ts tests/render-jobs.test.ts tests/audit-cli.test.ts tests/server.test.ts tests/audit-jobs.test.ts tests/pdf.test.ts",
+    "test": "node --experimental-strip-types --test tests/compare.test.ts tests/workflow.test.ts tests/enums.test.ts tests/source.test.ts tests/render.test.ts tests/skills.test.ts tests/report-store.test.ts tests/screenshots.test.ts tests/render-jobs.test.ts tests/audit-cli.test.ts tests/audit-models.test.ts tests/cursor-agent.test.ts tests/server.test.ts tests/audit-jobs.test.ts tests/pdf.test.ts",
     "serve": "node --experimental-strip-types src/server.ts",
     "audit": "node --experimental-strip-types src/audit-cli.ts",
     "compare": "node --experimental-strip-types src/cli.ts",

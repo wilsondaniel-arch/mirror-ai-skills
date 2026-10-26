@@ -67,7 +67,11 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     runner: process.env.MIRROR_AI_RUNNER,
     cliLog: process.env.MIRROR_AI_CLI_LOG,
     binPath: process.env.PATH,
+    cursorAgent: process.env.CURSOR_AGENT,
+    cursorConversation: process.env.CURSOR_CONVERSATION_ID,
   };
+  delete process.env.CURSOR_AGENT;
+  delete process.env.CURSOR_CONVERSATION_ID;
   process.env.ANTHROPIC_BASE_URL = claude.url;
   process.env.ANTHROPIC_API_KEY = "test-key";
   process.env.MIRROR_AI_CLI_LOG = cliLog;
@@ -327,6 +331,8 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     restore("MIRROR_AI_RUNNER", saved.runner);
     restore("MIRROR_AI_CLI_LOG", saved.cliLog);
     restore("PATH", saved.binPath);
+    restore("CURSOR_AGENT", saved.cursorAgent);
+    restore("CURSOR_CONVERSATION_ID", saved.cursorConversation);
   }
 });
 

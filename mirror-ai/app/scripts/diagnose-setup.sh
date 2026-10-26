@@ -63,12 +63,19 @@ else
 fi
 
 # Audit runner
+if command -v agent >/dev/null 2>&1 && agent --version >/dev/null 2>&1; then
+  if agent status 2>&1 | grep -qi "not logged in"; then
+    warn "Cursor Agent CLI installed but not signed in — run: agent login"
+  else
+    ok "Cursor Agent CLI ready (preferred in Cursor)"
+  fi
+fi
 if command -v claude >/dev/null 2>&1 && claude --version >/dev/null 2>&1; then
-  ok "Claude Code CLI available (default audit runner)"
+  ok "Claude Code CLI available"
 elif [[ -f "$ROOT/.env" ]] && grep -qE '^ANTHROPIC_API_KEY=.+$' "$ROOT/.env" 2>/dev/null; then
   ok "API runner possible (ANTHROPIC_API_KEY set)"
 else
-  warn "No claude CLI and no API key — audits will fail until one is configured"
+  warn "No agent login, claude CLI, or API key — run ./setup.sh --yes or agent login"
 fi
 
 # Server

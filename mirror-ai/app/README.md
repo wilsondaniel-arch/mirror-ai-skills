@@ -83,6 +83,8 @@ Create an **App password** or **Repository access token** under Bitbucket → Pe
 
 Cursor-specific tokens (`__CURSOR_*_AUTH_TOKEN`) are injected only inside Cursor sessions; do not rely on them in a plain terminal.
 
+**Cursor install (recommended):** install the Mirror AI skill, then run `./setup.sh --yes` (or open via `/mirror-ai` — bootstrap runs it). Audits use the **Cursor `agent` CLI** and **Claude Opus 5.5** after one-time `agent login` — no Anthropic API key in `.env`. Override runners/models with `MIRROR_AI_RUNNER`, `MIRROR_AI_CURSOR_MODEL`, etc.
+
 ---
 
 ## Configuration

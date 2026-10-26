@@ -25,6 +25,7 @@ export interface ReportMeta {
   prompts: string;
   runner: string;
   effort: string;
+  model: string;
   createdAt: string;
   durationMs: number;
 }
@@ -44,6 +45,7 @@ export interface ReportIdentity {
   prompts: string;
   runner: string;
   effort: string;
+  model: string;
 }
 
 /**
@@ -59,6 +61,7 @@ export function reportKey(identity: ReportIdentity): string {
     identity.prompts,
     identity.runner,
     identity.effort,
+    identity.model,
   ];
   return createHash("sha256").update(parts.join("\u0000")).digest("hex").slice(0, 16);
 }
@@ -88,6 +91,7 @@ export function saveReport(identity: ReportIdentity, markdown: string, durationM
     prompts: identity.prompts,
     runner: identity.runner,
     effort: identity.effort,
+    model: identity.model,
     createdAt: new Date().toISOString(),
     durationMs,
   };

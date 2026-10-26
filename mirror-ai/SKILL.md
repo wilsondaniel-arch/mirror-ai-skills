@@ -67,7 +67,7 @@ Do **not** ask the user to clone or unzip anything. Run the skill’s start scri
 ## Prerequisites (only mention if bootstrap fails)
 
 - **Node.js 22+** — https://nodejs.org/
-- **Audits** (not required to open UI): `claude login` or `ANTHROPIC_API_KEY` in `~/.mirror-ai/.env` with `MIRROR_AI_RUNNER=api`
+- **Audits** (not required to open UI): one-time `agent login` in Cursor (uses your Cursor plan + Opus 5.5). No Anthropic API key. Setup runs `./setup.sh --yes` automatically.
 
 ## UI quick reference
 

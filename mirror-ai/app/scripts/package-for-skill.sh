@@ -34,3 +34,4 @@ chmod +x "$ROOT/skills/mirror-ai/scripts/"*.sh 2>/dev/null || true
 
 echo "Skill app bundle: $DEST ($(du -sh "$DEST" | awk '{print $1}'))"
 echo "Commit and push skills/ repo: cd skills && git add -A && git commit && git push"
+echo "New org remote (first time): ./scripts/publish-skill-repo.sh"

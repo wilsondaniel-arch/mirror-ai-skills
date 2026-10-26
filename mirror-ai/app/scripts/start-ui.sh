@@ -65,9 +65,10 @@ if [[ -f "$PIDFILE" ]]; then
   fi
 fi
 
-if [[ ! -d "$ROOT/node_modules" ]]; then
-  echo "Installing dependencies…"
-  npm install
+if [[ ! -d "$ROOT/node_modules" ]] || [[ ! -f "$ROOT/.env" ]]; then
+  echo "First-time setup…"
+  chmod +x "$ROOT/setup.sh" 2>/dev/null || true
+  "$ROOT/setup.sh" --yes --skip-tests
 fi
 
 echo "Starting Mirror AI on $URL (log: $LOG)"

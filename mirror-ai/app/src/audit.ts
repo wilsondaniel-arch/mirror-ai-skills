@@ -14,9 +14,8 @@ import { apiDriftScopeNote, readApiDriftWorkflow } from "./api-drift-workflow.ts
 import { readSources, type RepoSource } from "./scan.ts";
 import type { ModuleRow } from "./enums.ts";
 import type { ComparisonMode, ModuleDef } from "./types.ts";
-
-const API_MODEL = "claude-opus-5";
-const CLI_MODEL = "opus";
+import { resolveApiModel, resolveCliModel, type AuditRunner } from "./audit-models.ts";
+import { hasCursorAgentCli, preferCursorRunner, resolveCursorModel, runCursorAgent } from "./cursor-agent.ts";
 const MAX_FILES_PER_SIDE = 40;
 /** Characters of source per platform, for the bundled fallback. ~4 chars a token. */
 const EVIDENCE_BUDGET = Number(process.env.MIRROR_AI_EVIDENCE_BUDGET) || 200_000;
@@ -25,7 +24,12 @@ const EFFORT = (process.env.MIRROR_AI_EFFORT || "high") as "low" | "medium" | "h
 export const CONCURRENCY = Number(process.env.MIRROR_AI_CONCURRENCY) || 3;
 const TIMEOUT_MS = Number(process.env.MIRROR_AI_TIMEOUT_MS) || 2_700_000;
 
-export type Runner = "cli" | "api";
+export type Runner = AuditRunner;
+
+function resolveAuditModel(runner: Runner): string {
+  if (runner === "cursor") return resolveCursorModel(EFFORT);
+  return runner === "cli" ? resolveCliModel() : resolveApiModel();
+}
 
 export interface AuditRequest {
   androidPath: string;
@@ -149,8 +153,12 @@ export function auditPasses(projectRoot: string): AuditPass[] {
  */
 export function pickRunner(): Runner {
   const forced = process.env.MIRROR_AI_RUNNER;
-  if (forced === "cli" || forced === "api") return forced;
-  return hasClaudeCli() ? "cli" : "api";
+  if (forced === "cli" || forced === "api" || forced === "cursor") return forced;
+  if (preferCursorRunner()) return "cursor";
+  if (hasClaudeCli()) return "cli";
+  if (process.env.ANTHROPIC_API_KEY?.trim()) return "api";
+  if (hasCursorAgentCli()) return "cursor";
+  return "api";
 }
 
 let claudeCli: boolean | null = null;
@@ -251,7 +259,9 @@ async function runPassOnce(
     const markdown =
       runner === "cli"
         ? await runCli(pass, request, def, row)
-        : await runApi(apiClient(), pass, request, def, row);
+        : runner === "cursor"
+          ? await runCursor(pass, request, def, row)
+          : await runApi(apiClient(), pass, request, def, row);
     const file = saveReport(identity, markdown, Date.now() - started);
     return { markdown, cached: false, file, failed: false };
   } catch (error) {
@@ -297,6 +307,7 @@ function reportIdentity(request: AuditRequest, def: ModuleDef, pass: AuditPass, 
     prompts: promptsFingerprint(`${pass.id}\u0000${spec}`),
     runner,
     effort: EFFORT,
+    model: resolveAuditModel(runner),
   };
 }
 
@@ -362,6 +373,31 @@ the whole flow on each platform. You cannot run code or edit anything, and
 there is nobody to answer a question, so the feature to audit is given to you
 and Phase 1 never needs to ask which one it is.`;
 
+async function runCursor(
+  pass: AuditPass,
+  request: AuditRequest,
+  def: ModuleDef,
+  row: ModuleRow | null,
+): Promise<string> {
+  const prompt = [
+    featureBrief(request, def, row),
+    "",
+    `Android repository root: \`${request.androidPath}\` (your working directory).`,
+    `iOS repository root: \`${request.iosPath}\`.`,
+    "",
+    leadsSection(request.leads),
+  ].join("\n");
+  const systemAppend = `${passSpec(request, pass)}\n\n${CLI_NOTE}\n\n${reportShape(pass)}`;
+  return runCursorAgent({
+    prompt,
+    systemAppend,
+    cwd: request.androidPath,
+    addDir: request.iosPath,
+    effort: EFFORT,
+    timeoutMs: TIMEOUT_MS,
+  });
+}
+
 async function runCli(
   pass: AuditPass,
   request: AuditRequest,
@@ -380,7 +416,7 @@ async function runCli(
     "-p",
     prompt,
     "--model",
-    CLI_MODEL,
+    resolveCliModel(),
     "--effort",
     EFFORT,
     "--output-format",
@@ -503,7 +539,7 @@ async function runApi(
     return `${pass.firstHeading}\n\n${reason}`;
   }
   const stream = client.messages.stream({
-    model: API_MODEL,
+    model: resolveApiModel(),
     max_tokens: 64000,
     thinking: { type: "adaptive" },
     output_config: { effort: EFFORT },
@@ -641,7 +677,10 @@ function describeError(error: unknown): string {
     return `Claude API error ${error.status}: ${error.message}`;
   }
   if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-    return "The `claude` CLI could not be started. Install Claude Code, or set ANTHROPIC_API_KEY and MIRROR_AI_RUNNER=api.";
+    return "The audit CLI could not be started. In Cursor run `agent login` once, or install Claude Code, or set ANTHROPIC_API_KEY with MIRROR_AI_RUNNER=api.";
+  }
+  if (error instanceof Error && /not logged in/i.test(error.message)) {
+    return "Cursor is not signed in for the agent CLI. Run `agent login` once (no Anthropic API key needed).";
   }
   return error instanceof Error ? error.message : "The request failed.";
 }

@@ -41,18 +41,21 @@ export function findChrome(): string {
 }
 
 /**
- * The report as the page drew it, wrapped in a document that pulls the page's
- * own stylesheet and frames from `origin`, so the PDF matches the screen.
+ * The report as the page drew it, as one self-contained file: the page's own
+ * stylesheet inlined and frames already embedded by the page, so it opens the
+ * same anywhere and prints the same as the screen. Scripts are blocked.
  */
-export function reportDocument(reportHtml: string, title: string, origin: string): string {
+export function reportDocument(reportHtml: string, title: string, css: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta http-equiv="Content-Security-Policy" content="script-src 'none'" />
-<base href="${escapeAttr(origin)}" />
 <title>${escapeText(title)}</title>
-<link rel="stylesheet" href="app.css" />
+<style>
+${css.replace(/<\/style/gi, "<\\/style")}
+</style>
 </head>
 <body class="pdf-document">
 <main><article id="report">${reportHtml}</article></main>
@@ -111,8 +114,4 @@ function firstLine(text: string): string {
 
 function escapeText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function escapeAttr(value: string): string {
-  return escapeText(value).replace(/"/g, "&quot;");
 }

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { screenshotDir } from "./screenshots.ts";
+import { repairIosPreviews, saveIosPreviews, savedIosPreviews, writeIosPreviews } from "./ios-preview-writer.ts";
 import { readSources } from "./scan.ts";
 import type { RenderResult } from "./screenshot-render.ts";
 
@@ -10,6 +11,8 @@ const TIMEOUT_MS = Number(process.env.MIRROR_AI_RENDER_TIMEOUT_MS) || 1_800_000;
 /** A big module can carry dozens of previews; past this the build is mostly waiting. */
 const MAX_FRAMES = Number(process.env.MIRROR_AI_MAX_IOS_FRAMES) || 12;
 const HARNESS_CLASS = "MirrorAIFrames";
+/** Past this many unrelated broken tests, the test target is too far gone to patch around. */
+const MAX_SET_ASIDE = 10;
 
 export interface IosRenderRequest {
   projectRoot: string;
@@ -38,33 +41,78 @@ interface XcodeTarget {
  * `#Preview` blocks. Each body is copied into a generated XCTest in the app's
  * unit-test target, which hosts it in a window and writes a PNG. The test file
  * is deleted before returning, so the checkout is left as it was found.
+ *
+ * A module with no `#Preview` gets bodies written by Claude instead (see
+ * `ios-preview-writer.ts`); the ones that render are kept for the next run.
  */
 export async function renderIosScreens(request: IosRenderRequest): Promise<RenderResult> {
   const empty = (error: string, log = ""): RenderResult => ({ frames: [], screens: [], gradleModules: [], log, error });
   const target = findXcodeTarget(request.iosPath);
   if (!target) return empty("No Xcode project with a unit-test target that imports the app was found.");
   let previews = findIosPreviews(request.iosPath, request.keywords).slice(0, MAX_FRAMES);
-  if (previews.length === 0) return empty("No iOS view with a #Preview matches this module.");
+  const writer = { iosPath: request.iosPath, module: target.module, keywords: request.keywords, max: MAX_FRAMES };
+  const written = previews.length === 0;
+  if (written) {
+    previews = savedIosPreviews(request.projectRoot, request.moduleKey, request.iosPath);
+    if (previews.length === 0) {
+      try {
+        previews = await writeIosPreviews(writer);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "it failed";
+        return empty(`This module has no iOS #Preview, and writing one failed: ${reason}`);
+      }
+    }
+  }
+  if (previews.length === 0) return empty("No iOS view matches this module, so there was nothing to preview.");
   const device = bootSimulator();
   if ("error" in device) return empty(device.error);
 
   const harness = path.join(target.testDir, `${HARNESS_CLASS}.swift`);
   const outDir = mkdtempSync(path.join(tmpdir(), "mirror-ai-ios-"));
   const screens = [...new Set(previews.map((preview) => path.basename(preview.file)))];
+  const setAside = new Map<string, string>();
   let log = "";
   try {
     // A preview may lean on a `private` type from its own file, which the test
-    // target cannot see. Drop the frames the compiler names and try once more.
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // target cannot see. Written previews get one repair from the compiler's
+    // errors; after that, drop the frames the compiler names and try once more.
+    for (let attempt = 0; attempt < (written ? 3 : 2); attempt++) {
       const source = harnessSource(target.module, previews);
       writeFileSync(harness, source.text);
       const run = await xcodebuild(request.iosPath, target, device.id, outDir);
       log = run.output;
-      const failing = failingFrames(run.output, source.lines);
-      if (run.code === 0 || failing.size === 0 || failing.size === previews.length) break;
-      previews = previews.filter((_, index) => !failing.has(index));
+      const errors = frameErrors(run.output, source.lines);
+      // Only the harness runs, yet Xcode compiles the whole test target first,
+      // so one stale test elsewhere would block every frame. Blank it for this
+      // render (it is restored below) and build again without spending a try.
+      const stale = brokenTests(run.output, target.testDir, harness).filter((file) => !setAside.has(file));
+      if (stale.length > 0 && setAside.size < MAX_SET_ASIDE) {
+        for (const file of stale) {
+          setAside.set(file, readFileSync(file, "utf8"));
+          writeFileSync(file, "// Set aside by Mirror AI for one render: it did not compile. Restored afterwards.\n");
+        }
+        attempt--;
+        continue;
+      }
+      if (run.code === 0 || errors.size === 0) break;
+      if (written && attempt === 0) {
+        const broken = [...errors].map(([index, messages]) => ({ preview: previews[index], errors: messages }));
+        const kept = previews.filter((_, index) => !errors.has(index));
+        const labels = new Set(kept.map((preview) => preview.label));
+        const fixed = await repairIosPreviews(writer, broken).catch(() => []);
+        previews = [...kept, ...fixed.filter((preview) => !labels.has(preview.label))];
+        if (previews.length === 0) break;
+        continue;
+      }
+      if (errors.size === previews.length) break;
+      previews = previews.filter((_, index) => !errors.has(index));
     }
     const frames = collect(request, outDir);
+    if (written && frames.length > 0) {
+      const rendered = new Set(frames.map((frame) => frame.replace(/\.png$/, "")));
+      const kept = previews.filter((preview) => rendered.has(slug(preview.label)));
+      saveIosPreviews(request.projectRoot, request.moduleKey, request.iosPath, kept);
+    }
     return {
       frames,
       screens,
@@ -73,6 +121,7 @@ export async function renderIosScreens(request: IosRenderRequest): Promise<Rende
       error: frames.length === 0 ? xcodeError(log) : undefined,
     };
   } finally {
+    for (const [file, text] of setAside) writeFileSync(file, text);
     rmSync(harness, { force: true });
     rmSync(outDir, { recursive: true, force: true });
   }
@@ -80,7 +129,11 @@ export async function renderIosScreens(request: IosRenderRequest): Promise<Rende
 
 /** Which source file each of a module's iOS frames was rendered from, keyed by frame name. */
 export function iosFrameSources(iosPath: string, keywords: string[]): Map<string, string> {
-  return new Map(findIosPreviews(iosPath, keywords).map((preview) => [slug(preview.label), preview.file]));
+  return previewSources(findIosPreviews(iosPath, keywords));
+}
+
+export function previewSources(previews: IosPreview[]): Map<string, string> {
+  return new Map(previews.map((preview) => [slug(preview.label), preview.file]));
 }
 
 export function findIosPreviews(iosPath: string, keywords: string[]): IosPreview[] {
@@ -181,14 +234,33 @@ ${preview.body}
 
 /** The indexes of frames whose copied body the compiler rejected. */
 export function failingFrames(output: string, lines: [number, number][]): Set<number> {
-  const failing = new Set<number>();
-  const pattern = new RegExp(`${HARNESS_CLASS}\\.swift:(\\d+):\\d+: error:`, "g");
+  return new Set(frameErrors(output, lines).keys());
+}
+
+/** Test-target files other than the harness that the compiler rejected. */
+export function brokenTests(output: string, testDir: string, harness: string): string[] {
+  const root = path.resolve(testDir) + path.sep;
+  const files = new Set<string>();
+  for (const match of output.matchAll(/^(\/[^:\n]+\.swift):\d+:\d+: error: /gm)) {
+    const file = path.resolve(match[1]);
+    if (file.startsWith(root) && file !== path.resolve(harness)) files.add(file);
+  }
+  return [...files];
+}
+
+/** The compiler's errors for each rejected frame, keyed by its index. */
+export function frameErrors(output: string, lines: [number, number][]): Map<number, string[]> {
+  const errors = new Map<number, string[]>();
+  const pattern = new RegExp(`${HARNESS_CLASS}\\.swift:(\\d+):\\d+: error: (.*)`, "g");
   for (const match of output.matchAll(pattern)) {
     const line = Number(match[1]);
     const index = lines.findIndex(([start, end]) => line >= start && line <= end);
-    if (index >= 0) failing.add(index);
+    if (index < 0) continue;
+    const messages = errors.get(index) ?? [];
+    if (!messages.includes(match[2])) messages.push(match[2]);
+    errors.set(index, messages);
   }
-  return failing;
+  return errors;
 }
 
 function findXcodeTarget(iosPath: string): XcodeTarget | null {

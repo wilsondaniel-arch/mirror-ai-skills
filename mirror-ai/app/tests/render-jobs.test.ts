@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { RenderQueue, type RenderTarget } from "../src/render-jobs.ts";
-import { failingFrames, findIosPreviews, harnessSource, parsePreviews } from "../src/screenshot-render-ios.ts";
+import { brokenTests, failingFrames, findIosPreviews, frameErrors, harnessSource, parsePreviews } from "../src/screenshot-render-ios.ts";
+import { findIosViews, parseWrittenPreviews, saveIosPreviews, savedIosPreviews } from "../src/ios-preview-writer.ts";
 import { findScreens } from "../src/screenshot-render.ts";
 import { clearSourceCache } from "../src/scan.ts";
 import { screenshotDir } from "../src/screenshots.ts";
@@ -79,6 +80,88 @@ test("a compile error is traced back to the preview it came from", () => {
   assert.deepEqual([...failingFrames(output, harness.lines)], [1]);
   assert.match(harness.text, /@testable import App/);
   assert.match(harness.text, /name: "two"/);
+});
+
+test("each rejected frame keeps its own compiler errors", () => {
+  const harness = harnessSource("App", [
+    { file: "A.swift", label: "One", body: "    One()" },
+    { file: "B.swift", label: "Two", body: "    Two()" },
+  ]);
+  const twoLine = harness.text.split("\n").findIndex((line) => line.includes("Two()")) + 1;
+  const output = [
+    `/x/MirrorAIFrames.swift:${twoLine}:5: error: cannot find 'Two' in scope`,
+    `/x/MirrorAIFrames.swift:${twoLine}:5: error: cannot find 'Two' in scope`,
+  ].join("\n");
+  assert.deepEqual([...frameErrors(output, harness.lines)], [[1, ["cannot find 'Two' in scope"]]]);
+});
+
+test("only stale tests in the test target are set aside, never the harness or app code", () => {
+  const output = [
+    "/r/App Tests/Chat/LoggerTests.swift:121:17: error: cannot find 'NSErrorFailingURLKey' in scope",
+    "/r/App Tests/Chat/LoggerTests.swift:130:2: error: again",
+    "/r/App Tests/MirrorAIFrames.swift:12:5: error: cannot find 'Two' in scope",
+    "/r/App/Home/HomeView.swift:3:1: error: app code",
+    "/r/App Tests/Chat/LoggerTests.swift:140:2: warning: not an error",
+  ].join("\n");
+  assert.deepEqual(brokenTests(output, "/r/App Tests", "/r/App Tests/MirrorAIFrames.swift"), ["/r/App Tests/Chat/LoggerTests.swift"]);
+});
+
+test("written previews are read from the model's JSON, skipping malformed and duplicate entries", () => {
+  const text = `Here they are:
+\`\`\`json
+[
+  {"file": "App/BillHistory/ListView.swift", "label": "Bill list", "body": "ListView(items: [.sample])\\n    .environmentObject(Nav())"},
+  {"file": "App/BillHistory/ListView.swift", "label": "Bill list", "body": "ListView(items: [])"},
+  {"file": "App/BillHistory/Detail.swift", "label": "Detail", "body": "@Previewable @State var x = 1\\nDetail()"},
+  {"file": "App/BillHistory/Empty.swift", "label": "Empty", "body": "   "},
+  {"label": "No file", "body": "Thing()"}
+]
+\`\`\``;
+  const previews = parseWrittenPreviews(text);
+  assert.deepEqual(previews.map((preview) => preview.label), ["Bill list"]);
+  assert.match(previews[0].body, /environmentObject/);
+  assert.deepEqual(parseWrittenPreviews("I could not find any views."), []);
+});
+
+test("only module views a test target can see are offered to the preview writer, screens first", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "mirror-ios-"));
+  try {
+    mkdirSync(path.join(root, "App/Modules/BillHistory/Views"), { recursive: true });
+    mkdirSync(path.join(root, "App/Modules/Home"), { recursive: true });
+    mkdirSync(path.join(root, "AppTests/BillHistory"), { recursive: true });
+    writeFileSync(
+      path.join(root, "App/Modules/BillHistory/Views/BillHistoryRow.swift"),
+      "struct BillHistoryRow: View {\n  var body: some View { Text(\"\") }\n}\n",
+    );
+    writeFileSync(
+      path.join(root, "App/Modules/BillHistory/Views/BillHistoryListView.swift"),
+      "struct BillHistoryListView: View {}\nprivate struct MonthRow: View {}\nfileprivate struct Gap: View {}\nstruct Banner<Content: View>: View {}\n",
+    );
+    writeFileSync(path.join(root, "App/Modules/BillHistory/BillHistoryStrings.swift"), "enum BillHistoryStrings {}\n");
+    writeFileSync(path.join(root, "App/Modules/Home/HomeView.swift"), "struct HomeView: View {} // billhistory link\n");
+    writeFileSync(path.join(root, "AppTests/BillHistory/BillHistoryTests.swift"), "struct FakeView: View {}\n");
+    clearSourceCache();
+    assert.deepEqual(findIosViews(root, ["BILL_HISTORY"]), [
+      { file: "App/Modules/BillHistory/Views/BillHistoryListView.swift", views: ["BillHistoryListView", "Banner"] },
+      { file: "App/Modules/BillHistory/Views/BillHistoryRow.swift", views: ["BillHistoryRow"] },
+    ]);
+  } finally {
+    clearSourceCache();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("saved written previews are reused only for the checkout they rendered against", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "mirror-ios-"));
+  try {
+    const previews = [{ file: "A.swift", label: "One", body: "\nOne()\n" }];
+    saveIosPreviews(root, "billhistory", "/repos/ios", previews);
+    assert.deepEqual(savedIosPreviews(root, "billhistory", "/repos/ios"), previews);
+    assert.deepEqual(savedIosPreviews(root, "billhistory", "/repos/other-ios"), []);
+    assert.deepEqual(savedIosPreviews(root, "autopay", "/repos/ios"), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function target(root: string, moduleKey: string): RenderTarget {

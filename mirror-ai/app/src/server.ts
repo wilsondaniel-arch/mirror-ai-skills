@@ -12,10 +12,12 @@ import { repositoryModuleDef, type ComparisonMode } from "./types.ts";
 import { compareRepos, renderReport } from "./index.ts";
 import { RenderQueue, type ModuleJob } from "./render-jobs.ts";
 import { androidFrameSources } from "./screenshot-render.ts";
-import { iosFrameSources } from "./screenshot-render-ios.ts";
+import { iosFrameSources, previewSources } from "./screenshot-render-ios.ts";
+import { savedIosPreviews } from "./ios-preview-writer.ts";
 import { listScreenshots, readScreenshot, type Platform } from "./screenshots.ts";
 import { loadProjectEnv } from "./load-env.ts";
 import { findChrome, renderReportPdf, reportDocument } from "./pdf.ts";
+import { EXPORT_NAME, exportReport, exportsDir } from "./report-export.ts";
 import { readSourceView, withinRoot } from "./source.ts";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -95,19 +97,31 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return sendFile(res, path.join(publicDir, "drift-canvas.js"), "text/javascript; charset=utf-8");
     }
     if (req.method === "POST" && url.pathname === "/api/pdf") {
-      // The report with its citations and frames can run to several megabytes.
-      const body = await readJson(req, 25_000_000);
-      const html = typeof body.html === "string" ? body.html : "";
-      if (!html.trim()) return sendJson(res, 400, { error: "There is no report to print yet." });
+      const report = printableReport(await readJson(req, REPORT_LIMIT));
+      if ("error" in report) return sendJson(res, 400, { error: report.error });
       const chrome = findChrome();
       // No Chrome here: the page prints through the browser's dialog instead.
       if (!chrome) return sendJson(res, 501, { error: "Chrome is not installed on this machine.", fallback: "print" });
-      const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Mirror AI report";
-      // Frames are served per session from this server, so the printing browser
-      // fetches them over loopback on the port this request arrived on.
-      const origin = `http://127.0.0.1:${req.socket.localPort}/`;
-      const pdf = await renderReportPdf(chrome, reportDocument(html, title, origin));
+      const css = readFileSync(path.join(publicDir, "app.css"), "utf8");
+      const pdf = await renderReportPdf(chrome, reportDocument(report.html, report.title, css));
       return sendBytes(res, 200, pdf, "application/pdf");
+    }
+    if (req.method === "POST" && url.pathname === "/api/exports") {
+      // The page sends each finished report here once, and it is kept as files.
+      const report = printableReport(await readJson(req, REPORT_LIMIT));
+      if ("error" in report) return sendJson(res, 400, { error: report.error });
+      const saved = await exportReport(projectRoot, report.html, report.title);
+      return sendJson(res, 200, {
+        ...saved,
+        htmlUrl: `/exports/${saved.name}.html`,
+        pdfUrl: saved.pdf ? `/exports/${saved.name}.pdf` : null,
+      });
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/exports/")) {
+      const name = decodeURIComponent(url.pathname.slice("/exports/".length));
+      if (!EXPORT_NAME.test(name)) return sendJson(res, 404, { error: "Not found." });
+      const type = name.endsWith(".pdf") ? "application/pdf" : "text/html; charset=utf-8";
+      return sendFile(res, path.join(exportsDir(projectRoot), name), type);
     }
     if (req.method === "GET" && url.pathname === "/api/screenshots") {
       const session = sessions.get(url.searchParams.get("sessionId") ?? "");
@@ -252,7 +266,10 @@ function frameSources(session: Session, moduleKey: string): Record<Platform, Map
     };
     frameSourceCache.set(key, sources);
   }
-  return sources;
+  // Written previews appear after a render, so they are read fresh, not cached.
+  const written = savedIosPreviews(projectRoot, moduleKey, session.iosPath);
+  if (written.length === 0) return sources;
+  return { ...sources, ios: new Map([...sources.ios, ...previewSources(written)]) };
 }
 
 /** What both audit endpoints need from a request: the session, the ticked modules and the leads. */
@@ -333,6 +350,17 @@ function checkoutError(side: string, branch: string, error: string): string {
 }
 
 type Json = Record<string, unknown>;
+
+/** A report with its citations and embedded frames can run to tens of megabytes. */
+const REPORT_LIMIT = 60_000_000;
+
+/** What both print routes need from a request: the drawn report and a title. */
+function printableReport(body: Json): { html: string; title: string } | { error: string } {
+  const html = typeof body.html === "string" ? body.html : "";
+  if (!html.trim()) return { error: "There is no report to print yet." };
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "Mirror AI report";
+  return { html, title };
+}
 
 async function readJson(req: IncomingMessage, limit = 1_000_000): Promise<Json> {
   const chunks: Buffer[] = [];

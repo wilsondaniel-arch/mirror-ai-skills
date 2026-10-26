@@ -28,6 +28,7 @@ function identity(overrides: Partial<ReportIdentity> = {}): ReportIdentity {
     prompts: "prompts-v1",
     runner: "cli",
     effort: "high",
+    model: "claude-opus-5",
     ...overrides,
   };
 }
@@ -60,6 +61,7 @@ test("anything that would change the report changes the key", () => {
   assert.notEqual(keyOf({ prompts: "prompts-v2" }), original, "an edited prompt");
   assert.notEqual(keyOf({ runner: "api" }), original, "a different runner");
   assert.notEqual(keyOf({ effort: "max" }), original, "a different effort");
+  assert.notEqual(keyOf({ model: "claude-opus-5-5" }), original, "a different model");
   assert.notEqual(keyOf({ androidPath: ios }), original, "a different checkout");
   rmSync(base.projectRoot, { recursive: true, force: true });
 });

@@ -17,6 +17,7 @@ const refreshField = document.querySelector("#refresh-field");
 const differencesStep = document.querySelector("#differences-step");
 const downloadPdfButton = document.querySelector("#download-pdf");
 const reportNode = document.querySelector("#report");
+const exportNote = document.querySelector("#export-note");
 
 const groups = [
   { list: document.querySelector("#common-list"), count: document.querySelector("#common-count"), key: "common" },
@@ -26,6 +27,14 @@ const groups = [
 
 let sessionId = "";
 let activeMode = "module";
+// Declared before `applyLaunchParams()` runs below: a launch link starts an
+// audit straight away, and these are read on that path.
+let auditPoll = null;
+/**
+ * Bumped whenever the report on screen is replaced, so an export still waiting
+ * on frames for an earlier report does not save the new one under its name.
+ */
+let reportRun = 0;
 const MODE_KEY = "mirror-ai-comparison-mode";
 
 if (byModuleEnum) {
@@ -173,7 +182,7 @@ async function downloadReportPdf() {
     const response = await fetch("/api/pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ html: printableReportHtml(), title: filename.replace(/\.pdf$/, "") }),
+      body: JSON.stringify({ html: await printableReportHtml(), title: filename.replace(/\.pdf$/, "") }),
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
@@ -206,14 +215,66 @@ async function downloadReportPdf() {
 }
 
 /**
- * The report as drawn, with collapsed parts opened for paper. Frame URLs stay
- * relative: the printer resolves them against the server, which may not be
- * the address this page was opened on.
+ * The report as drawn, with collapsed parts opened and every frame embedded,
+ * so the copy stands on its own: frame URLs are tied to this session, which
+ * the saved file outlives.
  */
-function printableReportHtml() {
+async function printableReportHtml() {
   const copy = reportNode.cloneNode(true);
   for (const details of copy.querySelectorAll("details")) details.open = true;
+  await Promise.all(
+    [...copy.querySelectorAll("img[src]")].map(async (img) => {
+      try {
+        img.setAttribute("src", await dataUrl(img.getAttribute("src")));
+      } catch {
+        // A frame that cannot be fetched stays a link; the rest still saves.
+      }
+    }),
+  );
   return copy.innerHTML;
+}
+
+async function dataUrl(src) {
+  const blob = await (await fetch(src)).blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Every finished report is kept as an HTML file and a PDF without anyone
+ * asking. It waits for the frame renders, since those belong in the copy.
+ */
+async function autoExportReport(view) {
+  const run = reportRun;
+  await view.shotsSettled;
+  if (run !== reportRun || !exportNote) return;
+  exportNote.hidden = false;
+  exportNote.textContent = "Saving this report as HTML and PDF…";
+  const html = await printableReportHtml();
+  if (run !== reportRun) return;
+  const saved = await post("/api/exports", { html, title: pdfFileName().replace(/\.pdf$/, "") });
+  if (run !== reportRun) return;
+  if (!saved || saved.error) {
+    exportNote.textContent = `The report could not be saved: ${saved?.error || "no reply from the server"}.`;
+    return;
+  }
+  const links = [`<a href="${escapeHtml(saved.htmlUrl)}" target="_blank" rel="noopener">HTML</a>`];
+  if (saved.pdfUrl) links.push(`<a href="${escapeHtml(saved.pdfUrl)}" target="_blank" rel="noopener">PDF</a>`);
+  const folder = saved.html.replace(/[^/\\]+$/, "");
+  exportNote.innerHTML = `${saved.reused ? "Already saved" : "Saved"}: ${links.join(" · ")} — in <code>${escapeHtml(folder)}</code>${
+    saved.pdf ? "" : `. No PDF: ${escapeHtml(saved.pdfError || "it could not be printed")}`
+  }`;
+}
+
+function clearExportNote() {
+  reportRun += 1;
+  if (!exportNote) return;
+  exportNote.hidden = true;
+  exportNote.textContent = "";
 }
 
 async function listModules(body) {
@@ -222,6 +283,7 @@ async function listModules(body) {
   hide(modulesStep);
   hide(differencesStep);
   reportNode.innerHTML = "";
+  clearExportNote();
   updateDownloadPdfButton();
   const mode = comparisonMode();
   status(
@@ -263,8 +325,6 @@ async function listModules(body) {
  * one, starts them all, and fills each slot the moment its run finishes, so the
  * business logic can be read while the UI and API sections are still working.
  */
-let auditPoll = null;
-
 async function compare(modules) {
   const repositoryScoped = activeMode === "repository";
   if (!repositoryScoped && modules.length === 0) return;
@@ -287,10 +347,11 @@ async function compare(modules) {
     return;
   }
   reportNode.innerHTML = reportSkeleton(job);
+  clearExportNote();
   show(differencesStep);
   updateDownloadPdfButton();
   differencesStep.scrollIntoView({ block: "start" });
-  const view = { drawn: new Set(), shots: false, reference: false };
+  const view = { drawn: new Set(), shots: false, reference: false, exported: false };
   drawAudit(job, view, modules, noun, started, repositoryScoped);
   updateDownloadPdfButton();
   if (job.done) return;
@@ -351,7 +412,7 @@ function drawAudit(job, view, modules, noun, started, repositoryScoped = false) 
     const ui = [...reportNode.querySelectorAll("h3")].some((heading) => /UI Difference/i.test(heading.textContent));
     if (ui || job.done) {
       view.shots = true;
-      void showScreenshots(modules);
+      view.shotsSettled = showScreenshots(modules);
     }
   }
   if (job.done) {
@@ -363,6 +424,10 @@ function drawAudit(job, view, modules, noun, started, repositoryScoped = false) 
     }));
     status(auditSummary(summary, noun, started));
     updateDownloadPdfButton();
+    if (!view.exported) {
+      view.exported = true;
+      void autoExportReport(view);
+    }
     return;
   }
   status(`${progressLine(job)} — ${elapsed(started)} so far. Each section appears as soon as it is ready.`);
@@ -483,17 +548,23 @@ async function showScreenshots(modules) {
   if (!jobs.some(renderActive)) return;
   const query = new URLSearchParams({ sessionId });
   for (const module of modules) query.append("module", module);
-  renderPoll = setInterval(async () => {
-    let payload;
-    try {
-      payload = await (await fetch(`/api/render?${query}`)).json();
-    } catch {
-      return;
-    }
-    const latest = payload?.jobs ?? [];
-    await drawGallery(modules, latest);
-    if (!latest.some(renderActive)) clearInterval(renderPoll);
-  }, 5000);
+  // Settles when the last render finishes, so the saved copy can include it.
+  return new Promise((resolve) => {
+    renderPoll = setInterval(async () => {
+      let payload;
+      try {
+        payload = await (await fetch(`/api/render?${query}`)).json();
+      } catch {
+        return;
+      }
+      const latest = payload?.jobs ?? [];
+      await drawGallery(modules, latest);
+      if (!latest.some(renderActive)) {
+        clearInterval(renderPoll);
+        resolve();
+      }
+    }, 5000);
+  });
 }
 
 function renderActive(job) {
