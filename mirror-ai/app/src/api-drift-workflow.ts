@@ -10,12 +10,30 @@ import type { ComparisonMode } from "./types.ts";
  */
 export const API_DRIFT_WORKFLOW = "prompts/references/api-contract-drift-workflow.md";
 
+const WORKFLOW_CHAR_BUDGET = Number(process.env.MIRROR_AI_API_WORKFLOW_BUDGET) || 16_000;
+
 export function readApiDriftWorkflow(projectRoot: string): string {
   try {
-    return readFileSync(path.join(projectRoot, API_DRIFT_WORKFLOW), "utf8").trim();
+    const full = readFileSync(path.join(projectRoot, API_DRIFT_WORKFLOW), "utf8").trim();
+    return trimWorkflow(full);
   } catch {
     return "";
   }
+}
+
+function trimWorkflow(text: string): string {
+  if (!text) return "";
+  const budget = WORKFLOW_CHAR_BUDGET;
+  if (budget <= 0 || text.length <= budget) return text;
+  const head = Math.floor(budget * 0.75);
+  const tail = budget - head - 80;
+  return [
+    text.slice(0, head),
+    "",
+    "> _(Workflow truncated for token budget; discover contracts from the pinned checkouts.)_",
+    "",
+    text.slice(-tail),
+  ].join("\n");
 }
 
 /** Extra instructions appended to the api-skill system prompt for this audit. */

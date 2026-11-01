@@ -19,14 +19,36 @@ export function cursorAgentLoggedIn(): boolean {
   const probe = spawnSync("agent", ["status"], { encoding: "utf8", timeout: 15_000 });
   const out = `${probe.stdout}\n${probe.stderr}`.toLowerCase();
   if (out.includes("not logged in")) return false;
+  if (/authentication required|run ['`]agent login/i.test(out)) return false;
   return probe.status === 0 || out.includes("logged in");
 }
 
+/** Cursor agent audits need `agent login` or `CURSOR_API_KEY` — not merely `agent` on PATH. */
+export function canUseCursorRunner(): boolean {
+  if (!hasCursorAgentCli()) return false;
+  if (process.env.CURSOR_API_KEY?.trim()) return true;
+  return cursorAgentLoggedIn();
+}
+
+/** The agent CLI takes `claude-opus-5-5-high`, not `claude-opus-5-5[effort=high]`. */
 export function resolveCursorModel(effort: string): string {
-  const base = process.env.MIRROR_AI_CURSOR_MODEL?.trim() || DEFAULT_CURSOR_MODEL;
-  if (base.includes("[")) return base;
-  if (effort && effort !== "medium") return `${base}[effort=${effort}]`;
+  const configured = process.env.MIRROR_AI_CURSOR_MODEL?.trim() || DEFAULT_CURSOR_MODEL;
+  const bracket = configured.match(/^([^[]+)\[effort=([^\]]+)\]$/);
+  const base = (bracket?.[1] ?? configured).trim();
+  const level = (bracket?.[2] ?? effort).trim();
+  if (hasEffortSuffix(base)) return base;
+  if (base === DEFAULT_CURSOR_MODEL) return `${base}-${opusEffort(level)}`;
   return base;
+}
+
+function hasEffortSuffix(model: string): boolean {
+  return /-(none|minimal|low|medium|high|xhigh|max)$/.test(model);
+}
+
+/** Opus 5.5 is published as low, medium, and high on the agent CLI. */
+function opusEffort(effort: string): "low" | "medium" | "high" {
+  if (effort === "low" || effort === "medium") return effort;
+  return "high";
 }
 
 export interface CursorAgentRun {
@@ -57,7 +79,7 @@ export function runCursorAgent(request: CursorAgentRun): Promise<string> {
     request.addDir,
   ];
   return new Promise((resolve, reject) => {
-    const child = spawn("agent", args, { cwd: request.cwd, env: process.env });
+    const child = spawn("agent", args, { cwd: request.cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const timer = setTimeout(() => {
@@ -75,11 +97,11 @@ export function runCursorAgent(request: CursorAgentRun): Promise<string> {
       const out = Buffer.concat(stdout).toString("utf8").trim();
       const err = Buffer.concat(stderr).toString("utf8").trim();
       if (code !== 0) {
-        reject(
-          new Error(
-            `The Cursor agent CLI exited with ${code ?? 1}. ${firstLine(err) || firstLine(out) || "No output."}`,
-          ),
-        );
+        const detail = firstLine(err) || firstLine(out) || "No output.";
+        const message = /authentication required|agent login/i.test(`${err}\n${out}`)
+          ? `The Cursor agent is not signed in. ${runnerAuthHint()} (${detail})`
+          : `The Cursor agent CLI exited with ${code ?? 1}. ${detail}`;
+        reject(new Error(message));
         return;
       }
       if (!out) {
@@ -95,8 +117,12 @@ function firstLine(value: string): string {
   return value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "";
 }
 
-/** Prefer the Cursor agent runner in Cursor sessions when the CLI is installed. */
+/** Prefer the Cursor agent runner in Cursor sessions when the CLI can authenticate. */
 export function preferCursorRunner(): boolean {
   if (process.env.MIRROR_AI_PREFER_CURSOR === "0") return false;
-  return isCursorSession() && hasCursorAgentCli();
+  return isCursorSession() && canUseCursorRunner();
+}
+
+function runnerAuthHint(): string {
+  return "Run `agent login` once (Cursor plan), or set CURSOR_API_KEY, or use MIRROR_AI_RUNNER=cli after `claude login`, or MIRROR_AI_RUNNER=api with ANTHROPIC_API_KEY.";
 }

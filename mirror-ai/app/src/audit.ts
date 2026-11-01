@@ -15,7 +15,19 @@ import { readSources, type RepoSource } from "./scan.ts";
 import type { ModuleRow } from "./enums.ts";
 import type { ComparisonMode, ModuleDef } from "./types.ts";
 import { resolveApiModel, resolveCliModel, type AuditRunner } from "./audit-models.ts";
-import { hasCursorAgentCli, preferCursorRunner, resolveCursorModel, runCursorAgent } from "./cursor-agent.ts";
+import {
+  canUseCursorRunner,
+  hasCursorAgentCli,
+  preferCursorRunner,
+  resolveCursorModel,
+  runCursorAgent,
+} from "./cursor-agent.ts";
+import {
+  buildGraphEvidenceMarkdown,
+  codegraphEnabled,
+  ensureCodegraphIndex,
+  rankFilesForKeywords,
+} from "./codegraph.ts";
 const MAX_FILES_PER_SIDE = 40;
 /** Characters of source per platform, for the bundled fallback. ~4 chars a token. */
 const EVIDENCE_BUDGET = Number(process.env.MIRROR_AI_EVIDENCE_BUDGET) || 200_000;
@@ -37,7 +49,10 @@ export interface AuditRequest {
   rows: ModuleRow[];
   defs: ModuleDef[];
   projectRoot: string;
-  leads: string;
+  /** @deprecated Prefer moduleLeads — one compact leads blob per module. */
+  leads?: string;
+  /** Static matcher notes per module id (no @@compare blocks). */
+  moduleLeads?: Record<string, string>;
   mode: ComparisonMode;
   /** Ignore any saved report and audit again. */
   refresh?: boolean;
@@ -90,6 +105,17 @@ function sectionNumber(text: string): number {
   return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }
 
+const SKILL_PASS_RULES = `You are running one **skill section** of an Android vs iOS audit.
+
+- Analysis only: do not modify files, run shell, or edit configuration.
+- Cite paths relative to each platform's repository root with line numbers (\`path/File.kt:12\`).
+- Do not invent requirements, APIs, or file paths. Say what you could not verify.
+- Sections 1 and 2 of the business-logic spec are produced in a separate run; publish only the skill section below.`;
+
+function skillPassSpec(skill: { name: string; text: string }): string {
+  return [SKILL_PASS_RULES, "", "---", "", skill.text].join("\n");
+}
+
 /**
  * One run of the model over one module. The business logic audit is one pass
  * and every skill is another, so each section reaches the page the moment its
@@ -124,20 +150,7 @@ export function auditPasses(projectRoot: string): AuditPass[] {
     passes.push({
       id: skill.name,
       title: heading.replace(/^###\s+\d+\.\s+/, ""),
-      spec: [
-        main,
-        "---",
-        `# Skill in this run: ${skill.name}`,
-        "",
-        "This run publishes only the section the skill below names. Sections 1 and 2",
-        "of the main spec are published by a separate run over the same module, so do",
-        "not write them here. Use the main spec for how to explore the feature and for",
-        "its rules on evidence; the skill decides what to publish.",
-        "",
-        "---",
-        "",
-        skill.text,
-      ].join("\n"),
+      spec: skillPassSpec(skill),
       firstHeading: heading,
       publishes: `only the skill's section, "${heading.replace(/^###\s+/, "")}"`,
     });
@@ -153,11 +166,17 @@ export function auditPasses(projectRoot: string): AuditPass[] {
  */
 export function pickRunner(): Runner {
   const forced = process.env.MIRROR_AI_RUNNER;
-  if (forced === "cli" || forced === "api" || forced === "cursor") return forced;
+  if (forced === "cli" || forced === "api") return forced;
+  if (forced === "cursor") {
+    if (canUseCursorRunner()) return "cursor";
+    if (hasClaudeCli()) return "cli";
+    if (process.env.ANTHROPIC_API_KEY?.trim()) return "api";
+    return "cursor";
+  }
   if (preferCursorRunner()) return "cursor";
   if (hasClaudeCli()) return "cli";
   if (process.env.ANTHROPIC_API_KEY?.trim()) return "api";
-  if (hasCursorAgentCli()) return "cursor";
+  if (canUseCursorRunner()) return "cursor";
   return "api";
 }
 
@@ -254,14 +273,15 @@ async function runPassOnce(
   const saved = savedPass(request, def, pass);
   if (saved) return saved;
   const row = request.rows.find((item) => item.key === def.id) ?? null;
+  const graphEvidence = prepareGraphEvidence(request, def);
   const started = Date.now();
   try {
     const markdown =
       runner === "cli"
-        ? await runCli(pass, request, def, row)
+        ? await runCli(pass, request, def, row, graphEvidence)
         : runner === "cursor"
-          ? await runCursor(pass, request, def, row)
-          : await runApi(apiClient(), pass, request, def, row);
+          ? await runCursor(pass, request, def, row, graphEvidence)
+          : await runApi(apiClient(), pass, request, def, row, graphEvidence);
     const file = saveReport(identity, markdown, Date.now() - started);
     return { markdown, cached: false, file, failed: false };
   } catch (error) {
@@ -373,21 +393,58 @@ the whole flow on each platform. You cannot run code or edit anything, and
 there is nobody to answer a question, so the feature to audit is given to you
 and Phase 1 never needs to ask which one it is.`;
 
+function cliNote(graphEvidence: string): string {
+  if (!graphEvidence.trim()) return CLI_NOTE;
+  return `${CLI_NOTE}
+
+When **Codegraph evidence** is present in the user message, start there and use
+Read/Grep only to fill gaps — do not re-scan the whole repository.`;
+}
+
+function prepareGraphEvidence(request: AuditRequest, def: ModuleDef): string {
+  if (!codegraphEnabled() || request.mode === "repository") return "";
+  try {
+    ensureCodegraphIndex(request.androidPath);
+    ensureCodegraphIndex(request.iosPath);
+    return buildGraphEvidenceMarkdown(request.androidPath, request.iosPath, def.keywords);
+  } catch {
+    return "";
+  }
+}
+
+function resolveLeads(request: AuditRequest, def: ModuleDef): string {
+  return request.moduleLeads?.[def.id] ?? request.leads ?? "";
+}
+
+function userPromptParts(
+  request: AuditRequest,
+  def: ModuleDef,
+  row: ModuleRow | null,
+  graphEvidence: string,
+): string[] {
+  const parts = [
+    featureBrief(request, def, row),
+    "",
+    `Android repository root: \`${request.androidPath}\` (your working directory).`,
+    `iOS repository root: \`${request.iosPath}\`.`,
+  ];
+  if (graphEvidence.trim()) {
+    parts.push("", graphEvidence);
+  }
+  const leads = leadsSection(resolveLeads(request, def));
+  if (leads) parts.push("", leads);
+  return parts;
+}
+
 async function runCursor(
   pass: AuditPass,
   request: AuditRequest,
   def: ModuleDef,
   row: ModuleRow | null,
+  graphEvidence: string,
 ): Promise<string> {
-  const prompt = [
-    featureBrief(request, def, row),
-    "",
-    `Android repository root: \`${request.androidPath}\` (your working directory).`,
-    `iOS repository root: \`${request.iosPath}\`.`,
-    "",
-    leadsSection(request.leads),
-  ].join("\n");
-  const systemAppend = `${passSpec(request, pass)}\n\n${CLI_NOTE}\n\n${reportShape(pass)}`;
+  const prompt = userPromptParts(request, def, row, graphEvidence).join("\n");
+  const systemAppend = `${passSpec(request, pass)}\n\n${cliNote(graphEvidence)}\n\n${reportShape(pass)}`;
   return runCursorAgent({
     prompt,
     systemAppend,
@@ -403,15 +460,9 @@ async function runCli(
   request: AuditRequest,
   def: ModuleDef,
   row: ModuleRow | null,
+  graphEvidence: string,
 ): Promise<string> {
-  const prompt = [
-    featureBrief(request, def, row),
-    "",
-    `Android repository root: \`${request.androidPath}\` (your working directory).`,
-    `iOS repository root: \`${request.iosPath}\`.`,
-    "",
-    leadsSection(request.leads),
-  ].join("\n");
+  const prompt = userPromptParts(request, def, row, graphEvidence).join("\n");
   const args = [
     "-p",
     prompt,
@@ -441,24 +492,50 @@ async function runCli(
     "--add-dir",
     request.iosPath,
     "--append-system-prompt",
-    `${passSpec(request, pass)}\n\n${CLI_NOTE}\n\n${reportShape(pass)}`,
+    `${passSpec(request, pass)}\n\n${cliNote(graphEvidence)}\n\n${reportShape(pass)}`,
   ];
   const result = await run("claude", args, request.androidPath);
-  if (result.code !== 0) {
-    throw new Error(
-      `The \`claude\` CLI exited with ${result.code}. ${firstLine(result.stderr) || firstLine(result.stdout) || "No output."}`,
-    );
-  }
   let payload: { result?: unknown; is_error?: boolean };
   try {
     payload = JSON.parse(result.stdout);
   } catch {
+    if (result.code !== 0) {
+      throw new Error(cliFailureMessage(result));
+    }
     throw new Error(`The \`claude\` CLI returned output that was not JSON: ${firstLine(result.stdout)}`);
+  }
+  if (result.code !== 0) {
+    throw new Error(cliFailureMessage(result, payload));
   }
   const text = typeof payload.result === "string" ? payload.result.trim() : "";
   if (payload.is_error) throw new Error(text || "The CLI reported an error with no detail.");
   if (!text) throw new Error("The CLI returned an empty report.");
   return text;
+}
+
+function cliFailureMessage(
+  result: { code: number; stdout: string; stderr: string },
+  payload?: { result?: unknown; is_error?: boolean },
+): string {
+  const fromJson =
+    payload && typeof payload.result === "string" && payload.result.trim()
+      ? payload.result.trim()
+      : "";
+  const detail = fromJson || meaningfulCliOutput(result.stderr) || meaningfulCliOutput(result.stdout) || "No output.";
+  if (/not logged in/i.test(detail)) {
+    return `The \`claude\` CLI is not signed in. Run \`claude login\` once, or set MIRROR_AI_RUNNER=cursor and run \`agent login\`, or use MIRROR_AI_RUNNER=api with ANTHROPIC_API_KEY. (${detail})`;
+  }
+  return `The \`claude\` CLI exited with ${result.code}. ${detail}`;
+}
+
+/** Skip Claude's stdin idle warning when choosing a user-visible error line. */
+function meaningfulCliOutput(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/no stdin data received/i.test(line));
+  return lines[0] ?? "";
 }
 
 function run(
@@ -467,7 +544,8 @@ function run(
   cwd: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env: process.env });
+    // Claude -p waits briefly for stdin when inherited; ignore avoids the warning and delay.
+    const child = spawn(command, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const timer = setTimeout(() => {
@@ -526,6 +604,7 @@ async function runApi(
   request: AuditRequest,
   def: ModuleDef,
   row: ModuleRow | null,
+  graphEvidence: string,
 ): Promise<string> {
   const repositoryWide = request.mode === "repository";
   const needles = def.keywords.map((keyword) => keyword.toLowerCase());
@@ -550,7 +629,7 @@ async function runApi(
         cache_control: { type: "ephemeral" },
       },
     ],
-    messages: [{ role: "user", content: buildEvidence(request, def, row, android, ios) }],
+    messages: [{ role: "user", content: buildEvidence(request, def, row, android, ios, graphEvidence) }],
   });
   const message = await stream.finalMessage();
   if (message.stop_reason === "refusal") {
@@ -573,13 +652,18 @@ function buildEvidence(
   row: ModuleRow | null,
   android: Evidence,
   ios: Evidence,
+  graphEvidence: string,
 ): string {
   const title =
     request.mode === "repository" ? "# Scope: full repository (both platforms)" : `# Feature to audit: ${def.label}`;
   const lines = [title, "", featureBrief(request, def, row), ""];
+  if (graphEvidence.trim()) {
+    lines.push(graphEvidence, "");
+  }
   writeRepo(lines, "Android", request.androidPath, android);
   writeRepo(lines, "iOS", request.iosPath, ios);
-  lines.push(leadsSection(request.leads));
+  const leads = leadsSection(resolveLeads(request, def));
+  if (leads) lines.push(leads);
   return lines.join("\n");
 }
 
@@ -607,16 +691,29 @@ function writeRepo(lines: string[], platform: string, root: string, evidence: Ev
 /** Ranks matched files by keyword hits, or by path when auditing the whole repo. */
 function gatherEvidence(root: string, needles: string[], repositoryWide = false): Evidence {
   const matched: { source: RepoSource; hits: number }[] = [];
-  for (const source of readSources(root)) {
-    if (repositoryWide) {
-      matched.push({ source, hits: 1 });
-      continue;
+  const sources = readSources(root);
+  const sourceByPath = new Map(sources.map((source) => [source.relativePath, source]));
+
+  if (codegraphEnabled() && !repositoryWide && needles.length > 0) {
+    const ranked = rankFilesForKeywords(root, needles);
+    for (let index = 0; index < ranked.length; index++) {
+      const source = sourceByPath.get(ranked[index]);
+      if (source) matched.push({ source, hits: ranked.length - index });
     }
-    let hits = 0;
-    for (const needle of needles) {
-      if (source.lower.includes(needle)) hits += 1;
+  }
+
+  if (matched.length === 0) {
+    for (const source of sources) {
+      if (repositoryWide) {
+        matched.push({ source, hits: 1 });
+        continue;
+      }
+      let hits = 0;
+      for (const needle of needles) {
+        if (source.lower.includes(needle.toLowerCase())) hits += 1;
+      }
+      if (hits > 0) matched.push({ source, hits });
     }
-    if (hits > 0) matched.push({ source, hits });
   }
   matched.sort(
     (left, right) =>
@@ -679,10 +776,8 @@ function describeError(error: unknown): string {
   if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
     return "The audit CLI could not be started. In Cursor run `agent login` once, or install Claude Code, or set ANTHROPIC_API_KEY with MIRROR_AI_RUNNER=api.";
   }
-  if (error instanceof Error && /not logged in/i.test(error.message)) {
-    return "Cursor is not signed in for the agent CLI. Run `agent login` once (no Anthropic API key needed).";
-  }
-  return error instanceof Error ? error.message : "The request failed.";
+  if (error instanceof Error) return error.message;
+  return "The request failed.";
 }
 
 async function mapWithLimit<T, R>(

@@ -118,6 +118,8 @@ chmod +x setup.sh && ./setup.sh          # macOS / Linux
 | `MIRROR_AI_CONCURRENCY` | `3` | Parallel audit sections |
 | `MIRROR_AI_TIMEOUT_MS` | `2700000` | Per-section timeout (ms) |
 | `MIRROR_AI_EVIDENCE_BUDGET` | `200000` | API runner source budget (chars/platform) |
+| `MIRROR_AI_CODEGRAPH` | on when `codegraph` is on PATH | Set `0` to disable graph-ranked evidence |
+| `MIRROR_AI_API_WORKFLOW_BUDGET` | `16000` | Truncate api-skill workflow appendix (chars; `0` = full) |
 | `MIRROR_AI_REPORTS_DIR` | `./generated reports/` | Saved report location |
 | `BITBUCKET_USERNAME` / `BITBUCKET_TOKEN` | empty | Bitbucket HTTPS clone auth |
 | `ANDROID_HOME` | macOS: `~/Library/Android/sdk` | Android SDK for screenshots |

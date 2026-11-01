@@ -170,6 +170,17 @@ else
   HAS_CLAUDE=0
 fi
 
+if have_cmd codegraph; then
+  say "OK  Codegraph $(codegraph --version 2>/dev/null | head -1) (graph-ranked audit evidence)"
+else
+  say "NOTE Installing Codegraph CLI for smaller, faster audits…"
+  if npm install -g @colbymchenry/codegraph@0.9.9 --no-fund --no-audit 2>/dev/null && have_cmd codegraph; then
+    say "OK  Codegraph installed"
+  else
+    say "WARN Codegraph not installed — set MIRROR_AI_CODEGRAPH=0 or run: npm install -g @colbymchenry/codegraph"
+  fi
+fi
+
 if [[ "$PLATFORM" == "macOS" ]]; then
   if have_cmd xcodebuild; then
     say "OK  Xcode (iOS screenshot renders available)"

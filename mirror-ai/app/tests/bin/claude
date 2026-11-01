@@ -1,11 +1,24 @@
 #!/bin/bash
-# Stands in for the Claude Code CLI: records its arguments as a JSON array
-# (arguments contain newlines, so one-per-line would not survive), then prints
-# the JSON shape `claude -p --output-format json` produces.
+# Stands in for the Claude Code CLI: records each invocation's argv as a JSON
+# array of arrays (arguments contain newlines), then prints the JSON shape
+# `claude -p --output-format json` produces.
 if [[ "$1" == "--version" ]]; then
   echo "0.0.0-stub (Claude Code)"
   exit 0
 fi
 export MIRROR_AI_CLI_LOG="${MIRROR_AI_CLI_LOG:-/tmp/mirror-ai-claude.log}"
-node -e 'require("fs").writeFileSync(process.env.MIRROR_AI_CLI_LOG, JSON.stringify(process.argv.slice(1)))' -- "$@"
+node -e '
+const fs = require("fs");
+const log = process.env.MIRROR_AI_CLI_LOG;
+const entry = process.argv.slice(1);
+let invocations = [];
+try {
+  const parsed = JSON.parse(fs.readFileSync(log, "utf8"));
+  invocations = Array.isArray(parsed) && Array.isArray(parsed[0]) ? parsed : [parsed];
+} catch {
+  invocations = [];
+}
+invocations.push(entry);
+fs.writeFileSync(log, JSON.stringify(invocations));
+' -- "$@"
 printf '%s' '{"is_error":false,"num_turns":12,"result":"### 1. Executive Summary\n\nStub audit of the Catalog module."}'

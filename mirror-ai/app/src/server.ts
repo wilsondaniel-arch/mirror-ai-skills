@@ -5,11 +5,12 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AuditJobs } from "./audit-jobs.ts";
 import { auditModules, type AuditRequest } from "./audit.ts";
+import { listAccessibleRepos, listRepoBranches } from "./bitbucket-catalog.ts";
 import { cloneRepository, validateBranch } from "./clone.ts";
 import { parseComparisonMode } from "./comparison-mode.ts";
 import { buildModuleCatalog, moduleDefs, type ModuleRow } from "./enums.ts";
 import { repositoryModuleDef, type ComparisonMode } from "./types.ts";
-import { compareRepos, renderReport } from "./index.ts";
+import { buildModuleLeadsMap, leadsForRepository } from "./leads-builder.ts";
 import { RenderQueue, type ModuleJob } from "./render-jobs.ts";
 import { androidFrameSources } from "./screenshot-render.ts";
 import { iosFrameSources, previewSources } from "./screenshot-render-ios.ts";
@@ -203,6 +204,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       }
       return sendJson(res, 200, view);
     }
+    if (req.method === "GET" && url.pathname === "/api/repos") {
+      const repos = await listAccessibleRepos([projectRoot]);
+      if ("error" in repos) return sendJson(res, 400, { error: repos.error });
+      return sendJson(res, 200, { repos });
+    }
+    if (req.method === "GET" && url.pathname === "/api/branches") {
+      const repoUrl = url.searchParams.get("url") ?? "";
+      const branches = listRepoBranches(repoUrl, projectRoot);
+      if ("error" in branches) return sendJson(res, 400, { error: branches.error });
+      return sendJson(res, 200, { branches });
+    }
     if (req.method === "POST" && url.pathname === "/api/modules") {
       const body = await readJson(req);
       const checkouts = resolveCheckouts(body);
@@ -237,6 +249,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       const job = audits.status(url.searchParams.get("jobId") ?? "");
       if (!job) return sendJson(res, 404, { error: "That audit is no longer running. Find differences again." });
       return sendJson(res, 200, job);
+    }
+    if (req.method === "GET" && url.pathname === "/api/models") {
+      const result = await run("claude", ["--list-models"], projectRoot);
+      if (result.code !== 0) {
+        return sendJson(res, 502, { error: `Failed to list models (${result.stderr.trim().slice(0, 200)})` });
+      }
+      const matched = result.stdout.match(/- [\w-]+/g);
+      if (!matched || !matched[0].startsWith("- ")) {
+        return sendJson(res, 502, { error: "Could not parse available models from `claude --list-models`." });
+      }
+      const models = matched.map((m) => m.slice(2).trim());
+      const options = models.map((value) => ({ value, label: value }));
+      return sendJson(res, 200, { models, options });
     }
     if (req.method === "POST" && url.pathname === "/api/differences") {
       const body = await readJson(req);
@@ -279,13 +304,7 @@ function auditRequest(body: Json): AuditRequest | { error: string } {
   const mode = parseComparisonMode(body.mode ?? session.mode);
   if (mode === "repository") {
     const def = repositoryModuleDef();
-    const leads = renderReport(
-      compareRepos({
-        androidPath: session.androidPath,
-        iosPath: session.iosPath,
-        scope: { kind: "full" },
-      }),
-    );
+    const leads = leadsForRepository(session.androidPath, session.iosPath);
     return {
       androidPath: session.androidPath,
       iosPath: session.iosPath,
@@ -293,6 +312,7 @@ function auditRequest(body: Json): AuditRequest | { error: string } {
       defs: [def],
       projectRoot,
       leads,
+      moduleLeads: { [def.id]: leads },
       mode: "repository",
       refresh: body.refresh === true,
     };
@@ -305,20 +325,14 @@ function auditRequest(body: Json): AuditRequest | { error: string } {
   if (defs.length === 0) return { error: "Select at least one module." };
   // The static matcher no longer writes the report; it only hands the audit
   // a list of places worth checking, which the audit confirms or discards.
-  const leads = renderReport(
-    compareRepos({
-      androidPath: session.androidPath,
-      iosPath: session.iosPath,
-      scope: { kind: "enum-modules", defs },
-    }),
-  );
+  const moduleLeads = buildModuleLeadsMap(session.androidPath, session.iosPath, defs);
   return {
     androidPath: session.androidPath,
     iosPath: session.iosPath,
     rows,
     defs,
     projectRoot,
-    leads,
+    moduleLeads,
     mode: "module",
     refresh: body.refresh === true,
   };

@@ -31,6 +31,22 @@ async function startFakeClaude(reply: string) {
   };
 }
 
+function readCliInvocations(logPath: string): string[][] {
+  const parsed = JSON.parse(readFileSync(logPath, "utf8"));
+  if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0])) return parsed;
+  return [parsed as string[]];
+}
+
+function cliInvocationWith(logPath: string, pattern: RegExp): string[] {
+  const match = readCliInvocations(logPath).find((args) => {
+    const system = valueAfter(args, "--append-system-prompt") ?? "";
+    const user = args[0] === "-p" ? args[1] : "";
+    return pattern.test(system) || pattern.test(user);
+  });
+  assert.ok(match, `no CLI invocation matched ${pattern}`);
+  return match;
+}
+
 function sse(text: string): string {
   const message = {
     id: "msg_stub",
@@ -129,7 +145,7 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     assert.equal(viaCli.modules[0].cached, false);
     assert.equal(claude.requests.length, 0, "the CLI runner must not call the API");
 
-    const args: string[] = JSON.parse(readFileSync(cliLog, "utf8"));
+    const args = cliInvocationWith(cliLog, /Android vs iOS — Business Logic & Behavioral Audit/);
     assert.equal(args[0], "-p");
     assert.match(args[1], /Audit this module: \*\*Catalog\*\*/);
     assert.match(args[1], /StoreModuleType\.CATALOG/);
@@ -160,7 +176,15 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     // on both sides as the evidence.
     const sections = 1 + readdirSync(path.join(root, "prompts/skills")).filter((file) => file.endsWith(".md")).length;
     assert.equal(claude.requests.length, sections);
-    const sent = claude.requests[0];
+    const sent = claude.requests.find((request) =>
+      /Android vs iOS — Business Logic & Behavioral Audit/.test(request.system[0].text),
+    );
+    assert.ok(sent, "logic pass API request");
+    const skillSent = claude.requests.find((request) =>
+      /one \*\*skill section\*\*/.test(request.system[0].text),
+    );
+    assert.ok(skillSent, "skill pass API request");
+    assert.doesNotMatch(skillSent.system[0].text, /Phase 1: Discover the Complete Feature/);
     assert.equal(sent.model, "claude-opus-5");
     assert.deepEqual(sent.thinking, { type: "adaptive" });
     assert.equal(sent.output_config.effort, "high");
@@ -240,7 +264,7 @@ test("the page lists enum modules in three groups and compares the ticked ones",
       repoPolled = await get(server.url, "/api/audits", { jobId: repoAudit.id });
     }
     assert.equal(repoPolled.done, true);
-    const repoArgs: string[] = JSON.parse(readFileSync(cliLog, "utf8"));
+    const repoArgs = cliInvocationWith(cliLog, /both entire applications/i);
     assert.match(repoArgs[1], /both entire applications/i);
     assert.match(repoArgs[1], /Heuristic leads/);
 

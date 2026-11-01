@@ -6,6 +6,21 @@ const MIN_CASES = 5;
 /** Below this many shared constants, two enums are not the same catalog. */
 const MIN_OVERLAP = 3;
 const MODULE_NAME = /(module|redirect|destination|target|route|section|feature|screen|deeplink|cta|navigation|tab)/i;
+
+/**
+ * Enums that name in-app module / redirection targets (CTA `targetModule`, deep links).
+ * Not CMS string catalogs (`StringKeys`, `DynamicLabels`).
+ */
+const MODULE_REDIRECT_ENUM_NAMES = new Set([
+  "CTAModuleType",
+  "RedirectionTarget",
+  "NavigationTarget",
+  "StoreModuleType",
+  "StoreDestination",
+]);
+
+/** CMS copy enums — never the module list for Mirror AI. */
+const EXCLUDED_CATALOG_ENUM_NAMES = new Set(["StringKeys", "DynamicLabels"]);
 const JVM_RESERVED = new Set([
   "companion",
   "object",
@@ -143,8 +158,40 @@ export function selectModuleEnums(
   androidEnums: EnumDecl[],
   iosEnums: EnumDecl[],
 ): { android: EnumDecl | null; ios: EnumDecl | null } {
-  const android = candidates(androidEnums);
-  const ios = candidates(iosEnums);
+  const redirectPair = bestOverlapPair(moduleRedirectCatalogs(androidEnums), moduleRedirectCatalogs(iosEnums), 1000);
+  if (redirectPair) return redirectPair;
+
+  const android = candidates(androidEnums.filter((decl) => !isExcludedCatalogEnum(decl)));
+  const ios = candidates(iosEnums.filter((decl) => !isExcludedCatalogEnum(decl)));
+  const pair = bestOverlapPair(android, ios, 0);
+  if (pair) return pair;
+  return { android: largest(android), ios: largest(ios) };
+}
+
+function isExcludedCatalogEnum(decl: EnumDecl): boolean {
+  if (EXCLUDED_CATALOG_ENUM_NAMES.has(decl.enumName)) return true;
+  if (decl.enumName === "StringKeys" && /StringKeys\.kt$/i.test(decl.file)) return true;
+  if (decl.enumName === "DynamicLabels" && /Enum\.swift$/i.test(decl.file)) return true;
+  return false;
+}
+
+function isModuleRedirectCatalog(decl: EnumDecl): boolean {
+  if (isExcludedCatalogEnum(decl)) return false;
+  if (MODULE_REDIRECT_ENUM_NAMES.has(decl.enumName)) return true;
+  if (decl.enumName === "RedirectionTarget" && /RedirectionTarget\.swift$/i.test(decl.file)) return true;
+  if (decl.enumName === "NavigationTarget" && /NavigationTarget\.swift$/i.test(decl.file)) return true;
+  return false;
+}
+
+function moduleRedirectCatalogs(decls: EnumDecl[]): EnumDecl[] {
+  return candidates(decls.filter(isModuleRedirectCatalog));
+}
+
+function bestOverlapPair(
+  android: EnumDecl[],
+  ios: EnumDecl[],
+  redirectBonus: number,
+): { android: EnumDecl; ios: EnumDecl } | null {
   let best: { android: EnumDecl; ios: EnumDecl; score: number } | null = null;
   for (const left of android) {
     const leftKeys = keySet(left);
@@ -154,12 +201,11 @@ export function selectModuleEnums(
         if (leftKeys.has(key)) hits += 1;
       }
       if (hits < MIN_OVERLAP) continue;
-      const score = hits * 10 + nameBonus(left) + nameBonus(right);
+      const score = hits * 10 + nameBonus(left) + nameBonus(right) + redirectBonus;
       if (!best || score > best.score) best = { android: left, ios: right, score };
     }
   }
-  if (best) return { android: best.android, ios: best.ios };
-  return { android: largest(android), ios: largest(ios) };
+  return best ? { android: best.android, ios: best.ios } : null;
 }
 
 function candidates(decls: EnumDecl[]): EnumDecl[] {

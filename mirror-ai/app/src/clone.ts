@@ -89,6 +89,11 @@ function gitFailure(stderr: string, stdout: string, fallback?: string): string {
   return detail;
 }
 
+/** Git credentials for a host: env, Cursor tokens, then this Mac’s git credential store. */
+export function credentialsForUrl(url: string): GitAuth {
+  return cursorAuth(url);
+}
+
 function cursorAuth(url: string): GitAuth {
   const fromEnv = authFromEnv(url);
   if (fromEnv.token) return fromEnv;

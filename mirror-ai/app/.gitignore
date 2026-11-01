@@ -1,5 +1,6 @@
 # Dependencies and build artifacts
 node_modules/
+**/.codegraph/
 *.tsbuildinfo
 
 # Local secrets and environment

@@ -2,7 +2,13 @@ import { readSnippet, type CodeSnippet } from "./snippet.ts";
 import { isTestPath } from "./text.ts";
 import type { ComparisonResult, Finding, Location, PlatformModule } from "./types.ts";
 
-export function renderReport(result: ComparisonResult): string {
+export interface RenderReportOptions {
+  /** When false, omit @@compare code panes (smaller audit prompts). Default true. */
+  includeCodeSnippets?: boolean;
+}
+
+export function renderReport(result: ComparisonResult, options: RenderReportOptions = {}): string {
+  const includeCodeSnippets = options.includeCodeSnippets ?? true;
   const lines: string[] = [];
   lines.push("# Mirror AI comparison");
   lines.push("");
@@ -64,7 +70,7 @@ export function renderReport(result: ComparisonResult): string {
     lines.push(`- Evidence: ${finding.evidence}`);
     lines.push(`- Suggested fix: ${finding.suggestedFix}`);
     lines.push("");
-    writeSideBySide(lines, result, finding);
+    if (includeCodeSnippets) writeSideBySide(lines, result, finding);
   });
   if (result.missingRequests.length > 0) {
     lines.push("## Requested modules not found");

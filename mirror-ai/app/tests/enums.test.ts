@@ -66,6 +66,32 @@ test("reads Swift cases, raw values and inline lists, and skips switch cases", (
   );
 });
 
+test("prefers redirection module enums over StringKeys and DynamicLabels", () => {
+  const android = [
+    ...findEnums(
+      "app/src/main/java/com/cwp/app/utils/StringKeys.kt",
+      "enum class StringKeys { ONE, TWO, THREE, FOUR, FIVE, SIX, SEVEN, EIGHT, NINE, TEN }",
+    ),
+    ...findEnums(
+      "core/common/src/main/java/com/cwp/core/common/model/configuration/ConfigurationEnums.kt",
+      "enum class CTAModuleType { NONE, BILL_PAYMENT, MEDIA_LOUNGE, HELP_N_SUPPORT, HISTORY, TOPUP }",
+    ),
+  ];
+  const ios = [
+    ...findEnums(
+      "Panama/Constants/Enum.swift",
+      "enum DynamicLabels: String { case ONE, TWO, THREE, FOUR, FIVE, SIX, SEVEN, EIGHT, NINE, TEN }",
+    ),
+    ...findEnums(
+      "Panama/CoreClasses/RedirectionTarget.swift",
+      "enum RedirectionTarget: String { case BILL_PAYMENT, MEDIA_LOUNGE, HELP_N_SUPPORT, HISTORY, TOPUP, NONE }",
+    ),
+  ];
+  const picked = selectModuleEnums(android, ios);
+  assert.equal(picked.android?.enumName, "CTAModuleType");
+  assert.equal(picked.ios?.enumName, "RedirectionTarget");
+});
+
 test("matches the two module enums by shared constants, not by name", () => {
   const android = findEnums(
     "Config.kt",

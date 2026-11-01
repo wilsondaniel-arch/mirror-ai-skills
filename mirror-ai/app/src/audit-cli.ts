@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { auditModules, pickRunner } from "./audit.ts";
 import { cloneRepository, validateBranch } from "./clone.ts";
 import { buildModuleCatalog, moduleDefs, moduleKey, type ModuleRow } from "./enums.ts";
-import { compareRepos, renderReport } from "./index.ts";
+import { buildModuleLeadsMap } from "./leads-builder.ts";
 import { loadProjectEnv } from "./load-env.ts";
 import { listSavedReports, reportsDir } from "./report-store.ts";
 
@@ -86,20 +86,14 @@ export async function main(argv: string[]): Promise<number> {
   note(`Auditing ${defs.length} module(s) with the ${pickRunner()} runner: ${defs.map((def) => def.label).join(", ")}`);
   note("A module with no saved report takes a few minutes; saved ones return at once.");
   const started = Date.now();
-  const leads = renderReport(
-    compareRepos({
-      androidPath: checkouts.androidPath,
-      iosPath: checkouts.iosPath,
-      scope: { kind: "enum-modules", defs },
-    }),
-  );
+  const moduleLeads = buildModuleLeadsMap(checkouts.androidPath, checkouts.iosPath, defs);
   const audit = await auditModules({
     androidPath: checkouts.androidPath,
     iosPath: checkouts.iosPath,
     rows: selected,
     defs,
     projectRoot,
-    leads,
+    moduleLeads,
     mode: "module",
     refresh: argv.includes("--refresh"),
   });

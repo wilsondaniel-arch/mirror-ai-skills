@@ -5,6 +5,10 @@ if [[ "$1" == "--version" ]] || [[ "$1" == "-v" ]]; then
   exit 0
 fi
 if [[ "$1" == "status" ]] || [[ "$1" == "whoami" ]]; then
+  if [[ "${MIRROR_AI_AGENT_STUB_LOGIN:-1}" == "0" ]]; then
+    echo "Not logged in"
+    exit 1
+  fi
   echo "Logged in as test@example.com"
   exit 0
 fi

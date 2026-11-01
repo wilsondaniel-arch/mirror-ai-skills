@@ -11,28 +11,36 @@
       <header>
         <p class="eyebrow">Mirror AI</p>
         <h1>Compare Android and iOS</h1>
-        <p class="lede">Paste both repository links. Mirror AI reads each repo, finds its module enum, and lists every module — shared ones first, then the ones only one platform has. Private Bitbucket repos use this Mac’s git login.</p>
+        <p class="lede">Choose the Android and iOS repositories you can access, then a branch for each. Mirror AI reads both checkouts, finds their module enums, and lists every module — shared ones first, then the ones only one platform has. Private Bitbucket repos use this Mac’s git login.</p>
       </header>
 
       <form id="repo-form">
         <div class="repo">
           <div class="field">
             <label for="android-url">Android repository</label>
-            <input id="android-url" name="androidUrl" type="url" placeholder="https://bitbucket.org/org/android-app" value="https://bitbucket.org/paytmteam/lla-superapp-android/" autocomplete="off" />
+            <p id="android-url-loading" class="field-loading">Loading your repos…</p>
+            <select id="android-url" name="androidUrl" hidden></select>
+            <p id="android-url-error" class="field-error" hidden></p>
           </div>
           <div class="field">
             <label for="android-branch">Android branch</label>
-            <input id="android-branch" name="androidBranch" type="text" placeholder="main" value="Jamaica/release/sprint-17" autocomplete="off" spellcheck="false" />
+            <p id="android-branch-loading" class="field-loading" hidden>Loading branches…</p>
+            <select id="android-branch" name="androidBranch" hidden disabled></select>
+            <p id="android-branch-error" class="field-error" hidden></p>
           </div>
         </div>
         <div class="repo">
           <div class="field">
             <label for="ios-url">iOS repository</label>
-            <input id="ios-url" name="iosUrl" type="url" placeholder="https://bitbucket.org/org/ios-app" value="https://bitbucket.org/paytmteam/lla-superapp-ios/" autocomplete="off" />
+            <p id="ios-url-loading" class="field-loading">Loading your repos…</p>
+            <select id="ios-url" name="iosUrl" hidden></select>
+            <p id="ios-url-error" class="field-error" hidden></p>
           </div>
           <div class="field">
             <label for="ios-branch">iOS branch</label>
-            <input id="ios-branch" name="iosBranch" type="text" placeholder="main" value="Jamaica/release/sprint-17" autocomplete="off" spellcheck="false" />
+            <p id="ios-branch-loading" class="field-loading" hidden>Loading branches…</p>
+            <select id="ios-branch" name="iosBranch" hidden disabled></select>
+            <p id="ios-branch-error" class="field-error" hidden></p>
           </div>
         </div>
         <label class="checkbox scope-toggle">
@@ -40,12 +48,19 @@
           Scope by module enum
         </label>
         <p id="scope-hint" class="hint">When off, Mirror AI compares the whole codebase in one report and starts the audit as soon as both repositories are connected.</p>
+        <div class="model-row">
+            <label for="model-select" class="field-label">Model</label>
+            <select id="model-select" name="model" class="full-width">
+                <option value="" disabled selected>Load available models...</option>
+            </select>
+        </div>
+        <button id="load-models" type="button">Load Models from Cursor</button>
         <label id="refresh-field" class="checkbox" hidden>
           <input id="refresh" type="checkbox" />
           Audit again, ignoring saved reports
         </label>
         <div class="actions">
-          <button id="list-modules" type="submit">List modules</button>
+          <button id="list-modules" type="submit" disabled>List modules</button>
         </div>
       </form>
 

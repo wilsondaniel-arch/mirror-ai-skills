@@ -65,6 +65,27 @@ function syncScopeUi() {
   }
 }
 
+const sides = {
+  android: {
+    url: androidUrl,
+    branch: androidBranch,
+    urlLoading: document.querySelector("#android-url-loading"),
+    urlError: document.querySelector("#android-url-error"),
+    branchLoading: document.querySelector("#android-branch-loading"),
+    branchError: document.querySelector("#android-branch-error"),
+    preferredUrl: "https://bitbucket.org/paytmteam/lla-superapp-android",
+  },
+  ios: {
+    url: iosUrl,
+    branch: iosBranch,
+    urlLoading: document.querySelector("#ios-url-loading"),
+    urlError: document.querySelector("#ios-url-error"),
+    branchLoading: document.querySelector("#ios-branch-loading"),
+    branchError: document.querySelector("#ios-branch-error"),
+    preferredUrl: "https://bitbucket.org/paytmteam/lla-superapp-ios",
+  },
+};
+
 repoForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void listModules({
@@ -74,6 +95,213 @@ repoForm.addEventListener("submit", (event) => {
     iosBranch: iosBranch.value,
   });
 });
+
+androidUrl.addEventListener("change", () => {
+  void loadBranches("android");
+});
+iosUrl.addEventListener("change", () => {
+  void loadBranches("ios");
+});
+androidBranch.addEventListener("change", () => {
+  rememberBranch("android");
+});
+iosBranch.addEventListener("change", () => {
+  rememberBranch("ios");
+});
+
+const loadModelsButton = document.querySelector("#load-models");
+
+loadModelsButton.addEventListener("click", async () => {
+  const select = document.getElementById("model-select");
+  showLoading(select.loading, select, select.previousElementSibling);
+  try {
+    const response = await fetch("/api/models");
+    if (!response.ok) throw new Error(await response.text());
+    const payload = await response.json();
+    fillSelect(select, payload.options, "");
+  } catch (error) {
+    updateModelError(error instanceof Error ? error.message : "Could not load models.");
+  }
+});
+
+function showLoading(loading, control, error) {
+  if (loading) loading.hidden = false;
+  if (control) control.hidden = true;
+  if (error) error.hidden = true;
+}
+
+function showControl(loading, control) {
+  if (loading) loading.hidden = true;
+  if (control) {
+    control.hidden = false;
+    control.disabled = false;
+  }
+}
+
+function showFieldError(loading, control, error, message) {
+  if (loading) loading.hidden = true;
+  if (control) control.hidden = true;
+  if (error) {
+    error.hidden = false;
+    error.textContent = message;
+  }
+}
+
+function updateModelError(message) {
+  const select = document.getElementById("model-select");
+  if (!select.previousElementSibling) return;
+  select.previousElementSibling.textContent = message;
+}
+
+function choiceKey(value) {
+  const text = String(value || "").trim().replace(/\.git$/, "").replace(/\/$/, "");
+  try {
+    return new URL(text).pathname.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return text.toLowerCase();
+  }
+}
+
+function fillSelect(select, options, preferred) {
+  select.replaceChildren();
+  const wanted = choiceKey(preferred);
+  for (const option of options) {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    select.append(node);
+  }
+  const match = [...select.options].find((option) => choiceKey(option.value) === wanted);
+  if (match) select.value = match.value;
+}
+
+function syncListButton() {
+  const ready = [androidUrl, iosUrl, androidBranch, iosBranch].every((control) => control && !control.hidden && control.value);
+  listButton.disabled = !ready;
+}
+
+/** Kept until a full page refresh. Changing a dropdown reuses this instead of fetching again. */
+let repoOptionsPromise = null;
+const branchesByRepo = new Map();
+const branchLoads = new Map();
+const chosenBranch = new Map();
+
+function rememberBranch(key) {
+  const side = sides[key];
+  if (!side?.url.value || !side.branch.value) return;
+  chosenBranch.set(`${key}:${choiceKey(side.url.value)}`, side.branch.value);
+}
+
+function pageParams() {
+  return typeof location === "undefined" ? new URLSearchParams() : new URLSearchParams(location.search);
+}
+
+async function loadRepositoryChoices() {
+  const params = pageParams();
+  if (!repoOptionsPromise) {
+    listButton.disabled = true;
+    for (const side of Object.values(sides)) showLoading(side.urlLoading, side.url, side.urlError);
+    repoOptionsPromise = fetchRepoOptions().catch((error) => {
+      repoOptionsPromise = null;
+      throw error;
+    });
+  }
+  try {
+    const options = await repoOptionsPromise;
+    for (const [key, side] of Object.entries(sides)) {
+      const current = side.url.value;
+      const preferred = current || params.get(key === "android" ? "androidUrl" : "iosUrl") || side.preferredUrl;
+      fillSelect(side.url, options, preferred);
+      showControl(side.urlLoading, side.url);
+    }
+    await Promise.all(Object.keys(sides).map((key) => loadBranches(key)));
+    if (params.get("autostart") === "1") {
+      if (params.get("refresh") === "1" && refresh) refresh.checked = true;
+      void listModules({
+        androidUrl: androidUrl.value,
+        iosUrl: iosUrl.value,
+        androidBranch: androidBranch.value,
+        iosBranch: iosBranch.value,
+      });
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not load repositories.";
+    for (const side of Object.values(sides)) {
+      showFieldError(side.urlLoading, side.url, side.urlError, message);
+      if (side.branchLoading) side.branchLoading.hidden = true;
+    }
+  }
+}
+
+async function fetchRepoOptions() {
+  const response = await fetch("/api/repos");
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || "Could not load repositories.");
+  const repos = Array.isArray(body.repos) ? body.repos : [];
+  if (repos.length === 0) throw new Error("No repositories were found for this Bitbucket login.");
+  return repos.map((repo) => ({
+    value: repo.url,
+    label: repo.fullName || repo.name,
+  }));
+}
+
+async function loadBranches(key) {
+  const side = sides[key];
+  const repoUrl = side.url.value;
+  if (!repoUrl) return;
+  const cacheKey = choiceKey(repoUrl);
+  const cached = branchesByRepo.get(cacheKey);
+  if (cached) {
+    showBranches(side, key, cached);
+    return;
+  }
+  let pending = branchLoads.get(cacheKey);
+  const firstLoad = !pending;
+  if (!pending) {
+    pending = fetchBranchNames(repoUrl);
+    branchLoads.set(cacheKey, pending);
+  }
+  if (firstLoad) {
+    showLoading(side.branchLoading, side.branch, side.branchError);
+    listButton.disabled = true;
+  }
+  try {
+    const names = await pending;
+    branchesByRepo.set(cacheKey, names);
+    if (choiceKey(side.url.value) !== cacheKey) return;
+    showBranches(side, key, names);
+  } catch (error) {
+    branchLoads.delete(cacheKey);
+    if (choiceKey(side.url.value) !== cacheKey) return;
+    const message = error instanceof Error ? error.message : "Could not load branches.";
+    showFieldError(side.branchLoading, side.branch, side.branchError, message);
+  } finally {
+    branchLoads.delete(cacheKey);
+    syncListButton();
+  }
+}
+
+function showBranches(side, key, names) {
+  const remembered = chosenBranch.get(`${key}:${choiceKey(side.url.value)}`);
+  const requested = pageParams().get(key === "android" ? "androidBranch" : "iosBranch");
+  const preferred = [remembered, requested].find((name) => name && names.some((branch) => choiceKey(branch) === choiceKey(name))) || names[0];
+  fillSelect(
+    side.branch,
+    names.map((name) => ({ value: name, label: name })),
+    preferred,
+  );
+  showControl(side.branchLoading, side.branch);
+  rememberBranch(key);
+}
+
+async function fetchBranchNames(repoUrl) {
+  const response = await fetch(`/api/branches?url=${encodeURIComponent(repoUrl)}`);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || "Could not load branches.");
+  const names = Array.isArray(body.branches) ? body.branches : [];
+  if (names.length === 0) throw new Error("This repository has no branches.");
+  return names;
+}
 
 /** Optional query params for Simple Browser: autostart repos, or watch an existing jobId. */
 function applyLaunchParams() {
@@ -89,23 +317,10 @@ function applyLaunchParams() {
     if (typeof localStorage !== "undefined") localStorage.setItem(MODE_KEY, "repository");
     syncScopeUi();
   }
-  if (params.get("autostart") !== "1") return;
-  const android = params.get("androidUrl");
-  const ios = params.get("iosUrl");
-  if (android) androidUrl.value = android;
-  if (ios) iosUrl.value = ios;
-  if (params.get("androidBranch")) androidBranch.value = params.get("androidBranch");
-  if (params.get("iosBranch")) iosBranch.value = params.get("iosBranch");
-  if (params.get("refresh") === "1" && refresh) refresh.checked = true;
-  void listModules({
-    androidUrl: androidUrl.value,
-    iosUrl: iosUrl.value,
-    androidBranch: androidBranch.value,
-    iosBranch: iosBranch.value,
-  });
 }
 
 applyLaunchParams();
+void loadRepositoryChoices();
 
 async function watchAuditJob(jobId) {
   clearInterval(auditPoll);
