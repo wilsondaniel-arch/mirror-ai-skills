@@ -93,6 +93,17 @@ fi
 
 SELECT=()
 WANTED="${MIRROR_AI_MODULES:-${MIRROR_AI_MODULE:-}}"
+# MIRROR_AI_SHARD=i/n audits every n-th module starting at the i-th (whole-project
+# order), so a long audit can run as n short pipeline sessions and be merged.
+if [ -z "$WANTED" ] && [ -n "${MIRROR_AI_SHARD:-}" ]; then
+  WANTED="$(npm run audit --silent -- --android "$ANDROID" --ios "$IOS" --list --json 2>/dev/null \
+    | MIRROR_AI_SHARD="$MIRROR_AI_SHARD" node -e '
+      const index = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const [i, n] = process.env.MIRROR_AI_SHARD.split("/").map(Number);
+      const rows = [...index.common, ...index.androidOnly, ...index.iosOnly];
+      console.log(rows.filter((_, at) => at % n === i - 1).map((row) => row.key).join(" "));')"
+  [ -n "$WANTED" ] || { echo "MIRROR_AI_SHARD=$MIRROR_AI_SHARD selected no modules" >&2; exit 1; }
+fi
 if [ -n "$WANTED" ]; then
   for module in ${WANTED//,/ }; do SELECT+=(--module "$module"); done
 elif [ -n "${MIRROR_AI_COMMON:-}" ] && [ "${MIRROR_AI_COMMON}" != "0" ] && [ "${MIRROR_AI_COMMON}" != "false" ]; then
