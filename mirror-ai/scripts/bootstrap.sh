@@ -22,12 +22,28 @@ if [ "$NODE_MAJOR" -lt 22 ]; then
 fi
 
 mkdir -p "$INSTALL"
-rsync -a --delete \
-  --exclude 'node_modules/' \
-  --exclude '.cache/' \
-  --exclude 'generated reports/' \
-  --exclude '.env' \
-  "$BUNDLE/" "$INSTALL/"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --delete \
+    --exclude 'node_modules/' \
+    --exclude '.cache/' \
+    --exclude 'generated reports/' \
+    --exclude '.env' \
+    "$BUNDLE/" "$INSTALL/"
+else
+  # Minimal images (CI, Ark pipeline boxes) often lack rsync; tar is always there.
+  # Clear the old app files first so removed files do not linger (same as --delete),
+  # keeping installed packages, caches, saved reports and local settings.
+  for entry in "$INSTALL"/* "$INSTALL"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    case "$(basename "$entry")" in
+      node_modules | .cache | 'generated reports' | .env | .tools) ;;
+      *) rm -rf "$entry" ;;
+    esac
+  done
+  (cd "$BUNDLE" && tar cf - \
+    --exclude './node_modules' --exclude './.cache' --exclude './generated reports' --exclude './.env' .) \
+    | (cd "$INSTALL" && tar xf -)
+fi
 
 cd "$INSTALL"
 chmod +x setup.sh scripts/*.sh 2>/dev/null || true
