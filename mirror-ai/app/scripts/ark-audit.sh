@@ -82,11 +82,11 @@ fi
 if [ -z "${MIRROR_AI_CHROME:-}" ] && [ "$(uname -s)" != "Darwin" ] \
   && ! command -v google-chrome >/dev/null 2>&1 && ! command -v google-chrome-stable >/dev/null 2>&1 \
   && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-  CHROME_BIN="$(ls -d "$TOOLS"/chrome/chrome-headless-shell/*/*/chrome-headless-shell 2>/dev/null | head -1)"
+  CHROME_BIN="$(ls -d "$TOOLS"/chrome/chrome-headless-shell/*/*/chrome-headless-shell 2>/dev/null | head -1 || true)"
   if [ -z "$CHROME_BIN" ]; then
     echo "Fetching a headless Chrome for the PDF into $TOOLS/chrome" >&2
     npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$TOOLS/chrome" >&2 || true
-    CHROME_BIN="$(ls -d "$TOOLS"/chrome/chrome-headless-shell/*/*/chrome-headless-shell 2>/dev/null | head -1)"
+    CHROME_BIN="$(ls -d "$TOOLS"/chrome/chrome-headless-shell/*/*/chrome-headless-shell 2>/dev/null | head -1 || true)"
   fi
   [ -n "$CHROME_BIN" ] && export MIRROR_AI_CHROME="$CHROME_BIN"
 fi
