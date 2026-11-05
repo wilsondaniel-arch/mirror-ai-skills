@@ -110,6 +110,12 @@ LOG="$OUT/mirror-ai-run.log"
   echo "selection: ${SELECT[*]}"
 } > "$LOG"
 
+# A pipeline can drop an action that prints nothing for minutes (the scan only
+# reports every 10 requests), so say we are alive every 30 seconds.
+( while sleep 30; do echo "[mirror-ai] $(date -u +%H:%M:%S) audit running" >&2; done ) &
+HEARTBEAT=$!
+trap 'kill "$HEARTBEAT" 2>/dev/null || true' EXIT
+
 # The report is written by the tool, not by an agent, so it matches a local run exactly.
 npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/parity-report.md" 2>&1 | tee -a "$LOG" >&2
 
