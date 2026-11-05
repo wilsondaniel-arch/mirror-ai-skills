@@ -38,14 +38,10 @@ function loadPage(): { renderMarkdown: (markdown: string) => string; matrixOnly:
 
 const { renderMarkdown, matrixOnly, uiOnly, shotScore, CITATION } = loadPage();
 
-test("section 2 keeps only the matrix, dropping prose around it", () => {
+test("section 1 keeps only the matrix, dropping prose around it", () => {
   const trimmed = matrixOnly(
     [
-      "### 1. Executive Summary",
-      "",
-      "- Kept as written.",
-      "",
-      "### 2. Business Logic Difference Matrix",
+      "### 1. Business Logic Difference Matrix",
       "",
       "Here is what differs.",
       "",
@@ -58,15 +54,14 @@ test("section 2 keeps only the matrix, dropping prose around it", () => {
       "- BL-01: a list-builder test.",
     ].join("\n"),
   );
-  assert.match(trimmed, /- Kept as written\./);
   assert.match(trimmed, /\| BL-01 \|/);
   assert.doesNotMatch(trimmed, /Here is what differs/);
   assert.doesNotMatch(trimmed, /regression tests/);
   assert.doesNotMatch(trimmed, /list-builder/);
 });
 
-test("a section 2 with no table is left as written", () => {
-  const text = "### 2. Business Logic Difference Matrix\n\nNo differences found.";
+test("a section 1 with no table is left as written", () => {
+  const text = "### 1. Business Logic Difference Matrix\n\nNo differences found.";
   assert.equal(matrixOnly(text), text);
 });
 
@@ -78,7 +73,7 @@ function citations(text: string): string[] {
 test("the difference matrix becomes one card per finding", () => {
   const html = renderMarkdown(
     [
-      "### 2. Business Logic Difference Matrix",
+      "### 1. Business Logic Difference Matrix",
       "",
       "| ID | Business Area | Android Behavior | iOS Behavior | Business Impact | Severity | Confidence |",
       "|---|---|---|---|---|---|---|",
@@ -325,10 +320,10 @@ test("pairing is read from the counts, so an odd label cannot drop a screen", ()
   assert.equal(html.match(/<article class="ui-diff"/g)?.length, 2);
 });
 
-test("section 3 keeps only its heading and the per-screen table", () => {
+test("section 2 keeps only its heading and the per-screen table", () => {
   const trimmed = uiOnly(
     [
-      "### 3. UI Difference",
+      "### 2. UI Difference",
       "",
       "These counts show how many slots each team tagged.",
       "",
@@ -349,7 +344,7 @@ test("section 3 keeps only its heading and the per-screen table", () => {
       "- HistoryRoute was left out.",
     ].join("\n"),
   );
-  assert.match(trimmed, /^### 3\. UI Difference/);
+  assert.match(trimmed, /^### 2\. UI Difference/);
   assert.match(trimmed, /\| UI-01 \| A ↔ B \|/);
   for (const gone of ["These counts", "Screens in nav registry", "Bill history list", "| Slot |", "Notes on what", "HistoryRoute"]) {
     assert.ok(!trimmed.includes(gone), `should drop ${gone}`);
@@ -359,7 +354,7 @@ test("section 3 keeps only its heading and the per-screen table", () => {
 test("each screen's layout comes back with only its divergent rows", () => {
   const trimmed = uiOnly(
     [
-      "### 3. UI Difference",
+      "### 2. UI Difference",
       "",
       ...UI_HEADER,
       "| UI-01 | A ↔ B | Paired | 20 | 20 | 10 | 2 | a11y ids | Differs |",

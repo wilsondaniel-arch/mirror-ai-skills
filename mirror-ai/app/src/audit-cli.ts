@@ -1,7 +1,10 @@
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { auditModules, pickRunner } from "./audit.ts";
+import { auditModules, estimateBudget, pickRunner } from "./audit.ts";
+import { budgetStatus } from "./budget-audit.ts";
+import { markdownToHtml } from "./markdown-html.ts";
+import { exportReport, projectFolderName } from "./report-export.ts";
 import { cloneRepository, validateBranch } from "./clone.ts";
 import { buildModuleCatalog, moduleDefs, moduleKey, type ModuleRow } from "./enums.ts";
 import { buildModuleLeadsMap } from "./leads-builder.ts";
@@ -62,6 +65,24 @@ export async function main(argv: string[]): Promise<number> {
     note(`iOS: ${catalog.iosSource.enumName} (${catalog.iosSource.file})`);
   }
 
+  if (argv.includes("--list") && argv.includes("--json")) {
+    // Machine-readable module index (the Ark flow's modules-index.json).
+    const side = (row: ModuleRow) => ({ id: row.id, key: row.key, label: row.label, android: row.android?.caseName ?? null, ios: row.ios?.caseName ?? null });
+    console.log(
+      JSON.stringify(
+        {
+          android: { path: checkouts.androidPath, enum: catalog.androidSource },
+          ios: { path: checkouts.iosPath, enum: catalog.iosSource },
+          common: catalog.common.map(side),
+          androidOnly: catalog.androidOnly.map(side),
+          iosOnly: catalog.iosOnly.map(side),
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
   if (argv.includes("--list")) {
     console.log(listing(catalog.common, "Common modules"));
     console.log(listing(catalog.androidOnly, "Android only"));
@@ -70,7 +91,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const wanted = flags(argv, "--module");
-  const selected = argv.includes("--common") ? catalog.common : pick(rows, wanted);
+  const selected = argv.includes("--all") ? rows : argv.includes("--common") ? catalog.common : pick(rows, wanted);
   if (selected.length === 0) {
     console.error(
       wanted.length > 0
@@ -83,6 +104,19 @@ export async function main(argv: string[]): Promise<number> {
   for (const name of missing) note(`No module matched "${name}" — skipping it.`);
 
   const defs = moduleDefs(selected);
+  if (argv.includes("--estimate")) {
+    note(`Estimating a budget audit of ${defs.length} module(s); nothing is spent.`);
+    const estimate = await estimateBudget({
+      androidPath: checkouts.androidPath,
+      iosPath: checkouts.iosPath,
+      rows: selected,
+      defs,
+      projectRoot,
+      mode: "module",
+    });
+    console.log(formatEstimate(estimate));
+    return 0;
+  }
   note(`Auditing ${defs.length} module(s) with the ${pickRunner()} runner: ${defs.map((def) => def.label).join(", ")}`);
   note("A module with no saved report takes a few minutes; saved ones return at once.");
   const started = Date.now();
@@ -111,7 +145,24 @@ export async function main(argv: string[]): Promise<number> {
   } else {
     console.log(markdown);
   }
+  // Every report is also kept as Markdown, HTML and PDF in its project's folder.
+  const project = projectFolderName(checkouts.androidPath, checkouts.iosPath);
+  const scope = defs.length === rows.length ? "full-project" : defs.length === 1 ? defs[0].id : `${defs.length}-modules`;
+  const title = `mirror-ai-${scope}-${new Date().toISOString().slice(0, 10)}`;
+  const saved = await exportReport(projectRoot, markdownToHtml(markdown), title, project, markdown);
+  const folder = path.relative(projectRoot, path.dirname(saved.html));
+  note(
+    `Saved in "${folder}/": ${saved.name}.md, ${saved.name}.html${saved.pdf ? `, ${saved.name}.pdf` : ` (no PDF: ${saved.pdfError ?? "it could not be printed"})`}`,
+  );
   note(`Finished in ${Math.round((Date.now() - started) / 1000)}s.`);
+  if (pickRunner() === "budget") {
+    const spend = budgetStatus(projectRoot);
+    note(
+      spend.transport === "cli"
+        ? `Ran on your Claude subscription via the claude CLI (no dollar bill). API-equivalent usage so far: $${spend.spentUsd.toFixed(2)} (ledger: .cache/budget/ledger.json).`
+        : `Budget: $${spend.spentUsd.toFixed(2)} of $${spend.limitUsd.toFixed(2)} spent (ledger: .cache/budget/ledger.json).`,
+    );
+  }
   return 0;
 }
 
@@ -193,9 +244,11 @@ function usage(): string {
     "  --android-branch <n>    Branch for Android only",
     "  --ios-branch <n>        Branch for iOS only",
     "",
-    "  --list                  List every module, grouped, and stop",
+    "  --list                  List every module, grouped, and stop (add --json for JSON)",
     "  --module <id>           Module to audit, by constant or label. Repeat for more.",
     "  --common                Audit every module both platforms declare",
+    "  --all                   Audit every module, including platform-only ones",
+    "  --estimate              With the budget runner: plan the audit and print its cost; spend nothing",
     "  --out <file>            Write the report to a file instead of stdout",
     "  --refresh               Audit again even if a report was already saved",
     "  --reports               List every saved report and stop",
@@ -204,19 +257,50 @@ function usage(): string {
     "module, on the same commits with the same prompts, replays it instead of",
     "auditing again.",
     "",
-    "Environment: MIRROR_AI_RUNNER (cursor|cli|api), MIRROR_AI_EFFORT, MIRROR_AI_CONCURRENCY,",
+    "Environment: MIRROR_AI_RUNNER (budget|cursor|cli|api), MIRROR_AI_EFFORT, MIRROR_AI_CONCURRENCY,",
     "MIRROR_AI_TIMEOUT_MS, MIRROR_AI_CURSOR_MODEL, MIRROR_AI_API_MODEL, MIRROR_AI_CLI_MODEL.",
     "In Cursor, audits use the `agent` CLI + Opus 5.5 after `agent login` (no Anthropic API key).",
     "The audit spec is prompts/business-logic-audit.md.",
+    "",
+    "MIRROR_AI_RUNNER=budget runs a two-stage batch audit (Haiku 5.5 scan, Sonnet 5.5 verify)",
+    "under a hard cap: MIRROR_AI_BUDGET_USD (default 5). Spend is kept in .cache/budget/ledger.json;",
+    "delete that file to start a new budget. MIRROR_AI_SCAN_CHUNKS (default 2) sets how much code",
+    "per module is read.",
     "",
     "Examples:",
     "  npm run audit -- --android ./repos/android --ios ./repos/ios --list",
     "  npm run audit -- --android ./repos/android --ios ./repos/ios --module BILL_PAYMENT",
     "  npm run audit -- --android <url> --ios <url> --branch main --common --out audit.md",
+    "  MIRROR_AI_RUNNER=budget npm run audit -- --android <a> --ios <i> --all --estimate",
+    "  MIRROR_AI_RUNNER=budget npm run audit -- --android <a> --ios <i> --all --out project-audit.md",
   ].join("\n");
 }
 
 const entry = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === entry) {
   process.exit(await main(process.argv.slice(2)));
+}
+
+function formatEstimate(estimate: Awaited<ReturnType<typeof estimateBudget>>): string {
+  const usd = (value: number) => `$${value.toFixed(2)}`;
+  const cli = estimate.transport === "cli";
+  const lines = [
+    cli
+      ? "Transport: claude CLI on your Claude subscription — no dollar bill; figures below are API-equivalent usage, which counts against your plan's limits."
+      : "Transport: Message Batches API with ANTHROPIC_API_KEY — real dollars at half price.",
+    `Modules needing work: ${estimate.modules} (already-saved modules are free and excluded)`,
+    `Scan requests: ${estimate.scanRequests}, ~${Math.round(estimate.scanInputTokens / 1000)}K input tokens`,
+    `Scan   — likely ${usd(estimate.scanLikelyUsd)}, worst case ${usd(estimate.scanWorstUsd)}`,
+    `Verify — likely ${usd(estimate.verifyLikelyUsd)}, worst case ${usd(estimate.verifyWorstUsd)} (if every module has candidates)`,
+    `Total  — likely ${usd(estimate.scanLikelyUsd + estimate.verifyLikelyUsd)}, worst case ${usd(estimate.scanWorstUsd + estimate.verifyWorstUsd)}`,
+    cli
+      ? `Usage so far — ${usd(estimate.spentUsd)} API-equivalent.${Number.isFinite(estimate.limitUsd) ? ` Cap: ${usd(estimate.limitUsd)} (MIRROR_AI_CLI_USAGE_CAP_USD).` : " No cap (set MIRROR_AI_CLI_USAGE_CAP_USD to add one)."}`
+      : `Budget — ${usd(estimate.spentUsd)} of ${usd(estimate.limitUsd)} spent. The run never exceeds the cap: if the worst case does not fit, it reads less code per module first and skips modules last.`,
+    "",
+    "Coverage per module (matching source files read, Android | iOS):",
+    ...estimate.perModule.map(
+      (row) => `  ${row.label.padEnd(30)} ${row.android.padStart(9)} | ${row.ios.padStart(9)}  chunks ${row.chunks}${row.unread ? `  (${row.unread} lower-ranked files unread)` : ""}`,
+    ),
+  ];
+  return lines.join("\n");
 }

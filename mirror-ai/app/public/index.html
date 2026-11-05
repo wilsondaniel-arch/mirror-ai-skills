@@ -48,13 +48,25 @@
           Scope by module enum
         </label>
         <p id="scope-hint" class="hint">When off, Mirror AI compares the whole codebase in one report and starts the audit as soon as both repositories are connected.</p>
-        <div class="model-row">
-            <label for="model-select" class="field-label">Model</label>
-            <select id="model-select" name="model" class="full-width">
-                <option value="" disabled selected>Load available models...</option>
+        <fieldset class="audit-model-fieldset">
+          <legend>Audit model</legend>
+          <p class="hint">Audits use the Cursor Agent CLI. Lower effort or pick a cheaper model to reduce usage on your plan.</p>
+          <div class="field">
+            <label for="effort-select">Effort (Claude Opus 5.5 tier)</label>
+            <select id="effort-select" name="effort"></select>
+          </div>
+          <div class="field">
+            <label for="model-select">Model</label>
+            <select id="model-select" name="model" disabled>
+              <option value="">Default — Opus 5.5 matches effort above</option>
             </select>
-        </div>
-        <button id="load-models" type="button">Load Models from Cursor</button>
+          </div>
+          <div class="model-actions">
+            <button id="reload-models" type="button" class="secondary">Refresh model list</button>
+          </div>
+          <p id="model-hint" class="hint"></p>
+          <p id="model-error" class="field-error" hidden></p>
+        </fieldset>
         <label id="refresh-field" class="checkbox" hidden>
           <input id="refresh" type="checkbox" />
           Audit again, ignoring saved reports
@@ -102,6 +114,6 @@
         <article id="report"></article>
       </section>
     </main>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=audit-model-ui"></script>
   </body>
 </html>

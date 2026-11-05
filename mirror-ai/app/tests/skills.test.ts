@@ -13,7 +13,7 @@ test("every prompts/skills/*.md is loaded as a skill", () => {
   assert.ok(names.includes("api-skill"), `expected api-skill, got ${names.join(", ") || "none"}`);
   const api = skills.find((skill) => skill.name === "api-skill");
   assert.ok(api);
-  assert.match(api.text, /### 4\. API Contract Drift/);
+  assert.match(api.text, /### 3\. API Contract Drift/);
 });
 
 test("a directory with no skills is not an error", () => {
@@ -54,12 +54,12 @@ test("the api-skill keeps the discovery gates", () => {
   }
 });
 
-test("the main spec still publishes only its own two sections", () => {
+test("the main spec still publishes only its own section", () => {
   const spec = readAuditSpec(root);
-  assert.match(spec, /### 1\. Executive Summary/);
-  assert.match(spec, /### 2\. Business Logic Difference Matrix/);
+  assert.match(spec, /### 1\. Business Logic Difference Matrix/);
+  assert.doesNotMatch(spec, /Executive Summary/);
+  assert.doesNotMatch(spec, /### 2\./);
   assert.doesNotMatch(spec, /### 3\./);
-  assert.doesNotMatch(spec, /### 4\./);
 });
 
 test("skills load in the order of the section they publish, so API drift is last", () => {
@@ -95,10 +95,19 @@ test("placeholder for table width check on workflow tables", () => {
   }
 });
 
-test("the ui-skill declares section 3 and the exact columns the page dispatches on", () => {
+test("the api-skill omits KPIs, key patterns, and same-only baseline/env rows from the published spec", () => {
+  const api = readSkills(root).find((skill) => skill.name === "api-skill");
+  assert.ok(api);
+  assert.doesNotMatch(api.text, /#### KPIs/);
+  assert.doesNotMatch(api.text, /#### Key patterns/);
+  assert.match(api.text, /where \*\*Status\*\* is not `Same`/);
+  assert.match(api.text, /All configured environments match/);
+});
+
+test("the ui-skill declares section 2 and the exact columns the page dispatches on", () => {
   const ui = readSkills(root).find((skill) => skill.name === "ui-skill");
   assert.ok(ui);
-  assert.match(ui.text, /### 3\. UI Difference/);
+  assert.match(ui.text, /### 2\. UI Difference/);
   assert.match(
     ui.text,
     /\| ID \| Screen \| Pairing \| Android Elements \| iOS Elements \| Matched \| Divergent \| Join Key \| Largest Difference \|/,

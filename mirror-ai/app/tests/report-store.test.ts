@@ -37,13 +37,13 @@ test("a saved report comes back for the same module, repos and prompts", () => {
   const id = identity();
   try {
     assert.equal(readSavedReport(id), null);
-    const file = saveReport(id, "# Business logic audit — Catalog\n\n### 1. Executive Summary", 1234);
+    const file = saveReport(id, "# Business logic audit — Catalog\n\n### 1. Business Logic Difference Matrix", 1234);
     assert.ok(file.includes(REPORTS_DIR), "reports live in the named folder");
     assert.match(path.basename(file), /^catalog--[0-9a-f]{16}\.md$/);
 
     const saved = readSavedReport(id);
     assert.ok(saved);
-    assert.match(saved.markdown, /### 1\. Executive Summary/);
+    assert.match(saved.markdown, /### 1\. Business Logic Difference Matrix/);
     assert.equal(saved.meta.label, "Catalog");
     assert.equal(saved.meta.durationMs, 1234);
     assert.ok(saved.meta.createdAt);

@@ -23,9 +23,34 @@ LOG="${ROOT}/.cache/mirror-ai-serve.log"
 PIDFILE="${ROOT}/.cache/mirror-ai-serve.pid"
 mkdir -p "${ROOT}/.cache"
 
-server_up() {
+server_home_up() {
   curl -sf -o /dev/null --max-time 2 "$URL" 2>/dev/null
 }
+
+# Older builds answered `/` but lacked audit-settings / fixed `/api/models`.
+server_ready() {
+  server_home_up || return 1
+  curl -sf -o /dev/null --max-time 2 "${URL%/}/api/audit-settings" 2>/dev/null
+}
+
+stop_server() {
+  if [[ -f "$PIDFILE" ]]; then
+    old_pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      kill "$old_pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        kill -0 "$old_pid" 2>/dev/null || break
+        sleep 0.25
+      done
+    fi
+    rm -f "$PIDFILE"
+  fi
+}
+
+if server_home_up && ! server_ready; then
+  echo "Restarting Mirror AI (server build is outdated)…"
+  stop_server
+fi
 
 open_browser() {
   local ok=0
@@ -45,7 +70,7 @@ open_browser() {
   fi
 }
 
-if server_up; then
+if server_ready; then
   echo "Mirror AI is already running at $URL"
   open_browser
   exit 0
@@ -56,7 +81,7 @@ if [[ -f "$PIDFILE" ]]; then
   if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
     echo "Waiting for Mirror AI on $URL…"
     for _ in $(seq 1 30); do
-      if server_up; then
+      if server_ready; then
         open_browser
         exit 0
       fi
@@ -72,11 +97,11 @@ if [[ ! -d "$ROOT/node_modules" ]] || [[ ! -f "$ROOT/.env" ]]; then
 fi
 
 echo "Starting Mirror AI on $URL (log: $LOG)"
-nohup env PORT="$PORT" npm run serve >>"$LOG" 2>&1 &
+nohup env PORT="$PORT" CURSOR_AGENT=1 npm run serve >>"$LOG" 2>&1 &
 echo $! >"$PIDFILE"
 
 for _ in $(seq 1 60); do
-  if server_up; then
+  if server_ready; then
     echo "$URL"
     open_browser
     exit 0

@@ -55,4 +55,4 @@ function resolveCursorModelWithEffort(model: string, effort: string): string {
   return model;
 }
 
-export type AuditRunner = "cli" | "api" | "cursor";
+export type AuditRunner = "cli" | "api" | "cursor" | "budget";

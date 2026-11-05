@@ -1,5 +1,5 @@
 /**
- * Static Jamaica snapshot reports are no longer appended to audits. Section 4 is
+ * Static Jamaica snapshot reports are no longer appended to audits. Section 3 is
  * produced only by the api-skill pass against the current Android/iOS checkouts.
  */
 

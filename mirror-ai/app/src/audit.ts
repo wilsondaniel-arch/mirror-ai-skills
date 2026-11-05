@@ -16,10 +16,15 @@ import type { ModuleRow } from "./enums.ts";
 import type { ComparisonMode, ModuleDef } from "./types.ts";
 import { resolveApiModel, resolveCliModel, type AuditRunner } from "./audit-models.ts";
 import {
+  auditRunSettings,
+  resolveAuditModelForRun,
+  type AuditEffort,
+  type AuditRunSettings,
+} from "./audit-settings.ts";
+import {
   canUseCursorRunner,
   hasCursorAgentCli,
   preferCursorRunner,
-  resolveCursorModel,
   runCursorAgent,
 } from "./cursor-agent.ts";
 import {
@@ -28,19 +33,31 @@ import {
   ensureCodegraphIndex,
   rankFilesForKeywords,
 } from "./codegraph.ts";
+import { auditModuleOnBudget, estimateBudgetAudit, type BudgetEstimate } from "./budget-audit.ts";
 const MAX_FILES_PER_SIDE = 40;
 /** Characters of source per platform, for the bundled fallback. ~4 chars a token. */
 const EVIDENCE_BUDGET = Number(process.env.MIRROR_AI_EVIDENCE_BUDGET) || 200_000;
-const EFFORT = (process.env.MIRROR_AI_EFFORT || "high") as "low" | "medium" | "high" | "xhigh" | "max";
 /** Runs at once, counted in sections: three is one module's logic, UI and API together. */
 export const CONCURRENCY = Number(process.env.MIRROR_AI_CONCURRENCY) || 3;
 const TIMEOUT_MS = Number(process.env.MIRROR_AI_TIMEOUT_MS) || 2_700_000;
 
 export type Runner = AuditRunner;
 
-function resolveAuditModel(runner: Runner): string {
-  if (runner === "cursor") return resolveCursorModel(EFFORT);
-  return runner === "cli" ? resolveCliModel() : resolveApiModel();
+function runSettings(request: AuditRequest): AuditRunSettings {
+  return auditRunSettings(request);
+}
+
+function resolveAuditModel(runner: Runner, request: AuditRequest): string {
+  return resolveAuditModelForRun(runner, runSettings(request));
+}
+
+function effortFor(request: AuditRequest): AuditEffort {
+  return runSettings(request).effort;
+}
+
+/** The budget runner fixes its own effort per stage, so the UI's setting must not split its saved reports. */
+function identityEffort(runner: Runner, request: AuditRequest): string {
+  return runner === "budget" ? "budget" : effortFor(request);
 }
 
 export interface AuditRequest {
@@ -56,6 +73,10 @@ export interface AuditRequest {
   mode: ComparisonMode;
   /** Ignore any saved report and audit again. */
   refresh?: boolean;
+  /** Per-run effort (overrides MIRROR_AI_EFFORT from the UI). */
+  effort?: string;
+  /** Explicit Cursor agent model id from the UI (`--model`). */
+  cursorModel?: string;
 }
 
 export interface AuditResult {
@@ -110,7 +131,7 @@ const SKILL_PASS_RULES = `You are running one **skill section** of an Android vs
 - Analysis only: do not modify files, run shell, or edit configuration.
 - Cite paths relative to each platform's repository root with line numbers (\`path/File.kt:12\`).
 - Do not invent requirements, APIs, or file paths. Say what you could not verify.
-- Sections 1 and 2 of the business-logic spec are produced in a separate run; publish only the skill section below.`;
+- Section 1 of the business-logic spec is produced in a separate run; publish only the skill section below.`;
 
 function skillPassSpec(skill: { name: string; text: string }): string {
   return [SKILL_PASS_RULES, "", "---", "", skill.text].join("\n");
@@ -141,8 +162,8 @@ export function auditPasses(projectRoot: string): AuditPass[] {
       id: "logic",
       title: "Business logic",
       spec: main,
-      firstHeading: "### 1. Executive Summary",
-      publishes: "sections 1 and 2 of the main spec, and nothing else",
+      firstHeading: "### 1. Business Logic Difference Matrix",
+      publishes: "section 1 of the main spec (Business Logic Difference Matrix), and nothing else",
     },
   ];
   for (const skill of readSkills(projectRoot)) {
@@ -166,7 +187,7 @@ export function auditPasses(projectRoot: string): AuditPass[] {
  */
 export function pickRunner(): Runner {
   const forced = process.env.MIRROR_AI_RUNNER;
-  if (forced === "cli" || forced === "api") return forced;
+  if (forced === "cli" || forced === "api" || forced === "budget") return forced;
   if (forced === "cursor") {
     if (canUseCursorRunner()) return "cursor";
     if (hasClaudeCli()) return "cli";
@@ -277,7 +298,9 @@ async function runPassOnce(
   const started = Date.now();
   try {
     const markdown =
-      runner === "cli"
+      runner === "budget"
+        ? await runBudget(pass, request, def)
+        : runner === "cli"
         ? await runCli(pass, request, def, row, graphEvidence)
         : runner === "cursor"
           ? await runCursor(pass, request, def, row, graphEvidence)
@@ -326,9 +349,34 @@ function reportIdentity(request: AuditRequest, def: ModuleDef, pass: AuditPass, 
     label: pass.id === "logic" ? def.label : `${def.label} · ${pass.title}`,
     prompts: promptsFingerprint(`${pass.id}\u0000${spec}`),
     runner,
-    effort: EFFORT,
-    model: resolveAuditModel(runner),
+    effort: identityEffort(runner, request),
+    model: resolveAuditModel(runner, request),
   };
+}
+
+// ---------------------------------------------------------- the budget path
+
+/**
+ * Two batch stages over every module still missing a section, shared by all of
+ * this request's passes: the first ask pays, the rest reuse its outcome.
+ */
+/** What a budget audit of these modules should cost, without spending anything. */
+export function estimateBudget(request: AuditRequest): Promise<BudgetEstimate> {
+  const passes = auditPasses(request.projectRoot);
+  const specs = passes.map((item) => ({ pass: item, spec: passSpec(request, item) }));
+  const pending = request.defs.filter((item) => passes.some((candidate) => !savedPass(request, item, candidate)));
+  return estimateBudgetAudit(request, pending, specs);
+}
+
+async function runBudget(pass: AuditPass, request: AuditRequest, def: ModuleDef): Promise<string> {
+  const passes = auditPasses(request.projectRoot);
+  const specs = passes.map((item) => ({ pass: item, spec: passSpec(request, item) }));
+  const pending = request.defs.filter((item) => passes.some((candidate) => !savedPass(request, item, candidate)));
+  const outcome = await auditModuleOnBudget(request, def, pending, specs);
+  if (outcome.error) throw new Error(outcome.error);
+  const markdown = outcome.sections?.[pass.id];
+  if (!markdown) throw new Error("The budget run produced no text for this section.");
+  return markdown;
 }
 
 // ---------------------------------------------------------------- the brief
@@ -445,12 +493,14 @@ async function runCursor(
 ): Promise<string> {
   const prompt = userPromptParts(request, def, row, graphEvidence).join("\n");
   const systemAppend = `${passSpec(request, pass)}\n\n${cliNote(graphEvidence)}\n\n${reportShape(pass)}`;
+  const settings = runSettings(request);
   return runCursorAgent({
     prompt,
     systemAppend,
     cwd: request.androidPath,
     addDir: request.iosPath,
-    effort: EFFORT,
+    effort: settings.effort,
+    model: settings.cursorModel ?? undefined,
     timeoutMs: TIMEOUT_MS,
   });
 }
@@ -469,7 +519,7 @@ async function runCli(
     "--model",
     resolveCliModel(),
     "--effort",
-    EFFORT,
+    effortFor(request),
     "--output-format",
     "json",
     // Analysis only, per the spec's constraints: no shell, no writes.
@@ -621,7 +671,7 @@ async function runApi(
     model: resolveApiModel(),
     max_tokens: 64000,
     thinking: { type: "adaptive" },
-    output_config: { effort: EFFORT },
+    output_config: { effort: effortFor(request) },
     system: [
       {
         type: "text",

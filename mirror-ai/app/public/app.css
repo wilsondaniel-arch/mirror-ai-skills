@@ -159,7 +159,9 @@ textarea { resize: vertical; min-height: 72px; }
 }
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-top: 6px; align-items: center; }
+.audit-model-fieldset { margin: 14px 0 0; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 10px; }
+.audit-model-fieldset legend { padding: 0 6px; }
+.model-actions { margin-top: 4px; }
 .full-width { width: 100%; }
 
 button {

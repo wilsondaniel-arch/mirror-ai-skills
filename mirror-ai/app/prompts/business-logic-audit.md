@@ -5,7 +5,7 @@ Perform a comprehensive business logic and behavioral comparison of the same fea
 
 The goal is to identify differences in business rules, functional behavior, state management, API processing, data flow, validations, navigation, error handling, and edge cases.
 
-**Focus exclusively on business logic and functional behavior. Do not compare UI appearance, styling, layouts, or source code line by line in sections 1 and 2.** A skill may publish its own section about the UI; that is its subject, not this matrix's.
+**Focus exclusively on business logic and functional behavior. Do not compare UI appearance, styling, layouts, or source code line by line in section 1.** A skill may publish its own section about the UI; that is its subject, not this matrix's.
 
 The audit must determine whether both platforms produce equivalent business outcomes when given equivalent inputs, conditions, and user actions, even when their architectures, naming conventions, or implementation approaches differ.
 
@@ -139,29 +139,13 @@ Never invent expected behavior, requirements, API contracts, file paths, or line
 
 Phases 1 to 4 are the work, not the deliverable. Do all of it — the feature
 inventory, the behavior maps, the scenario walk-through — because it is what
-makes the two published sections correct. Publish only these two sections of
-your own. Do not include the inventory, the behavior maps, the scenario matrix,
-or a fix plan as sections of their own; fold what matters into the two below.
-Any skill running alongside this spec publishes its own numbered sections after
-these, and those are part of the report too.
+makes the published section correct. Publish only section 1 below. Do not
+include the inventory, the behavior maps, the scenario matrix, or a fix plan as
+sections of their own; fold what matters into the matrix. Any skill running
+alongside this spec publishes its own numbered sections after this one, and
+those are part of the report too.
 
-### 1. Executive Summary
-
-Six to twelve bullets a reader can scan in under a minute. Lead with what is
-broken and what it costs, not with what you did. Cover, in this order and only
-where there is something to say:
-
-- The confirmed mismatches, highest business impact first, one bullet each,
-  naming the rule that differs and the consequence for a user or a transaction.
-- Anything demonstrably missing on one platform.
-- The potential mismatches worth a look, and what would settle each one.
-- What you could not see, and so could not check.
-- What you verified as equivalent, in a single closing bullet.
-
-Write each bullet as a plain sentence. Bold the few words that carry it.
-No sub-headings, no nested lists, no table.
-
-### 2. Business Logic Difference Matrix
+### 1. Business Logic Difference Matrix
 
 One row per distinct difference, ordered by business impact. Use exactly these
 columns, in this order:
@@ -188,7 +172,7 @@ sentence saying so instead of an empty table.
 
 ## Strict Constraints
 - Analysis only. Do not modify files, refactor code, create commits, or change configuration.
-- Do not compare UI appearance, styling, layouts, or pixel-level differences in sections 1 and 2. Which screens exist and which elements they contain belongs to a skill's section, not to this matrix.
+- Do not compare UI appearance, styling, layouts, or pixel-level differences in section 1. Which screens exist and which elements they contain belongs to a skill's section, not to this matrix.
 - Do not perform a line-by-line or syntax-level comparison.
 - Ignore harmless architectural, naming, and framework differences.
 - Trace dependencies across the complete feature before drawing conclusions.

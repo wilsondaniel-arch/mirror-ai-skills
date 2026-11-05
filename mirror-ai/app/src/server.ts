@@ -4,7 +4,8 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AuditJobs } from "./audit-jobs.ts";
-import { auditModules, type AuditRequest } from "./audit.ts";
+import { auditModules, pickRunner, type AuditRequest } from "./audit.ts";
+import { auditSettingsPayload, listAgentModels, parseAuditEffort } from "./audit-settings.ts";
 import { listAccessibleRepos, listRepoBranches } from "./bitbucket-catalog.ts";
 import { cloneRepository, validateBranch } from "./clone.ts";
 import { parseComparisonMode } from "./comparison-mode.ts";
@@ -18,7 +19,7 @@ import { savedIosPreviews } from "./ios-preview-writer.ts";
 import { listScreenshots, readScreenshot, type Platform } from "./screenshots.ts";
 import { loadProjectEnv } from "./load-env.ts";
 import { findChrome, renderReportPdf, reportDocument } from "./pdf.ts";
-import { EXPORT_NAME, exportReport, exportsDir } from "./report-export.ts";
+import { EXPORT_NAME, PROJECT_NAME, exportReport, exportsDir, projectFolderName } from "./report-export.ts";
 import { readSourceView, withinRoot } from "./source.ts";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -109,20 +110,29 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     if (req.method === "POST" && url.pathname === "/api/exports") {
       // The page sends each finished report here once, and it is kept as files.
-      const report = printableReport(await readJson(req, REPORT_LIMIT));
+      const body = await readJson(req, REPORT_LIMIT);
+      const report = printableReport(body);
       if ("error" in report) return sendJson(res, 400, { error: report.error });
-      const saved = await exportReport(projectRoot, report.html, report.title);
+      // Reports for the same two apps share one folder under "generated reports/".
+      const session = sessions.get(typeof body.sessionId === "string" ? body.sessionId : "");
+      const project = session ? projectFolderName(session.androidPath, session.iosPath) : undefined;
+      const saved = await exportReport(projectRoot, report.html, report.title, project);
+      const base = saved.project ? `/exports/${saved.project}/` : "/exports/";
       return sendJson(res, 200, {
         ...saved,
-        htmlUrl: `/exports/${saved.name}.html`,
-        pdfUrl: saved.pdf ? `/exports/${saved.name}.pdf` : null,
+        htmlUrl: `${base}${saved.name}.html`,
+        pdfUrl: saved.pdf ? `${base}${saved.name}.pdf` : null,
       });
     }
     if (req.method === "GET" && url.pathname.startsWith("/exports/")) {
-      const name = decodeURIComponent(url.pathname.slice("/exports/".length));
-      if (!EXPORT_NAME.test(name)) return sendJson(res, 404, { error: "Not found." });
+      const parts = decodeURIComponent(url.pathname.slice("/exports/".length)).split("/");
+      const name = parts.pop() ?? "";
+      const project = parts.length === 1 ? parts[0] : undefined;
+      if (parts.length > 1 || !EXPORT_NAME.test(name) || (project !== undefined && !PROJECT_NAME.test(project))) {
+        return sendJson(res, 404, { error: "Not found." });
+      }
       const type = name.endsWith(".pdf") ? "application/pdf" : "text/html; charset=utf-8";
-      return sendFile(res, path.join(exportsDir(projectRoot), name), type);
+      return sendFile(res, path.join(exportsDir(projectRoot, project), name), type);
     }
     if (req.method === "GET" && url.pathname === "/api/screenshots") {
       const session = sessions.get(url.searchParams.get("sessionId") ?? "");
@@ -250,18 +260,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       if (!job) return sendJson(res, 404, { error: "That audit is no longer running. Find differences again." });
       return sendJson(res, 200, job);
     }
+    if (req.method === "GET" && url.pathname === "/api/audit-settings") {
+      return sendJson(res, 200, auditSettingsPayload(pickRunner()));
+    }
     if (req.method === "GET" && url.pathname === "/api/models") {
-      const result = await run("claude", ["--list-models"], projectRoot);
-      if (result.code !== 0) {
-        return sendJson(res, 502, { error: `Failed to list models (${result.stderr.trim().slice(0, 200)})` });
-      }
-      const matched = result.stdout.match(/- [\w-]+/g);
-      if (!matched || !matched[0].startsWith("- ")) {
-        return sendJson(res, 502, { error: "Could not parse available models from `claude --list-models`." });
-      }
-      const models = matched.map((m) => m.slice(2).trim());
-      const options = models.map((value) => ({ value, label: value }));
-      return sendJson(res, 200, { models, options });
+      const listed = listAgentModels();
+      if (!listed.ok) return sendJson(res, 502, { error: listed.error });
+      return sendJson(res, 200, {
+        models: listed.options.map((option) => option.value),
+        options: listed.options,
+      });
     }
     if (req.method === "POST" && url.pathname === "/api/differences") {
       const body = await readJson(req);
@@ -301,6 +309,8 @@ function frameSources(session: Session, moduleKey: string): Record<Platform, Map
 function auditRequest(body: Json): AuditRequest | { error: string } {
   const session = sessions.get(typeof body.sessionId === "string" ? body.sessionId : "");
   if (!session) return { error: "List the modules before finding differences." };
+  const auditOptions = readAuditOptions(body);
+  if ("error" in auditOptions) return auditOptions;
   const mode = parseComparisonMode(body.mode ?? session.mode);
   if (mode === "repository") {
     const def = repositoryModuleDef();
@@ -315,6 +325,7 @@ function auditRequest(body: Json): AuditRequest | { error: string } {
       moduleLeads: { [def.id]: leads },
       mode: "repository",
       refresh: body.refresh === true,
+      ...auditOptions,
     };
   }
   const selected = Array.isArray(body.modules)
@@ -335,7 +346,23 @@ function auditRequest(body: Json): AuditRequest | { error: string } {
     moduleLeads,
     mode: "module",
     refresh: body.refresh === true,
+    ...auditOptions,
   };
+}
+
+function readAuditOptions(body: Json): Pick<AuditRequest, "effort" | "cursorModel"> | { error: string } {
+  if (body.effort !== undefined && parseAuditEffort(body.effort) === null) {
+    return { error: "Effort must be low, medium, high, xhigh, or max." };
+  }
+  const effort = body.effort !== undefined ? String(body.effort) : undefined;
+  let cursorModel: string | undefined;
+  if (body.cursorModel !== undefined) {
+    if (typeof body.cursorModel !== "string") return { error: "Model must be a string." };
+    const trimmed = body.cursorModel.trim();
+    if (!trimmed) return { error: "Pick a model or use the default Opus 5.5 tier." };
+    cursorModel = trimmed;
+  }
+  return { effort, cursorModel };
 }
 
 function resolveCheckouts(body: Json): { androidPath: string; iosPath: string } | { error: string } {

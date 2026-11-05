@@ -278,10 +278,49 @@ rm -rf .cache/repos
 
 Sections stream to the UI as they finish (`POST /api/audits`, poll `GET /api/audits`). Reports cache under `generated reports/` when commits and prompts match.
 
+### Budget runner (whole project under a dollar cap)
+
+`MIRROR_AI_RUNNER=budget` audits every module in two Batch API stages at half price:
+
+1. **Scan.** Claude Haiku 5.5 reads each module's code, ranked by relevance, with tests
+   excluded. Blank, import and comment lines are stripped. Large shared files are cut
+   down to the regions around the module's mentions. Original line numbers are kept, so
+   citations stay exact. Each request stays under Haiku's 100K-token price tier.
+   The model returns candidate findings as JSON.
+2. **Verify.** Claude Sonnet 5.5 checks every candidate against the real source lines it
+   cites, drops what the code does not support, and writes sections 1–3 in the specs' format.
+
+Cost control:
+- `MIRROR_AI_BUDGET_USD` (default 5) is a hard cap.
+- Work goes out in waves. A wave is sent only when its worst case (no cache hits, full
+  `max_tokens`) fits what's left. Actual spend is then booked in `.cache/budget/ledger.json`.
+- Batch IDs and scan results are kept on disk, so a restart resumes a run instead of paying twice.
+- Finished sections are reused from `generated reports/`.
+
+Every module's report ends with a coverage note: how many matching files were read and
+which were not. Large shared modules (Home, Superapp, Login) match hundreds of files, so
+they are only partly covered.
+
+```bash
+# Free: plan the whole project and print its cost and coverage
+MIRROR_AI_RUNNER=budget npm run audit -- --android <a> --ios <i> --all --estimate
+# Run it
+MIRROR_AI_RUNNER=budget npm run audit -- --android <a> --ios <i> --all --out project-audit.md
+```
+
+**Two ways to send requests:**
+
+| Transport | When | Billing |
+|---|---|---|
+| `batch` | `ANTHROPIC_API_KEY` (Console key) is set | Real dollars at Batch API half price, hard-capped by `MIRROR_AI_BUDGET_USD` |
+| `cli` | No API key (default then), or `MIRROR_AI_BUDGET_TRANSPORT=cli` | Each request runs as `claude -p` with no tools on your Claude subscription login. There is no dollar bill, but it counts against your plan's usage limits. Usage is logged as an API-equivalent figure. If the plan limit is hit, finished modules stay saved, and re-running continues with the rest. |
+
+The `cli` transport needs the `claude` CLI signed in (`claude login`). Login tokens (`ANTHROPIC_AUTH_TOKEN`) cannot use the API directly from this app; they work only through the CLI.
+
 ### Skills (high level)
 
 - **`ui-skill`** — Section 3 UI Difference; element counts and match/drift; percentages computed in the browser.
-- **`api-skill`** — Section 4 API Contract Drift, discovered from the **pinned Android/iOS checkouts** using the superapp-workspace workflow in `prompts/references/api-contract-drift-workflow.md` (from `feature/api-contract-drift-v2`). Module scope by default; whole-app mode inventories every wired BFF path. No static Jamaica appendix is appended to audits.
+- **`api-skill`** — Section 3 API Contract Drift, discovered from the **pinned Android/iOS checkouts** using the superapp-workspace workflow in `prompts/references/api-contract-drift-workflow.md` (from `feature/api-contract-drift-v2`). Module scope by default; whole-app mode inventories every wired BFF path. No static Jamaica appendix is appended to audits. Published reports omit KPIs, Key patterns, matching baseline header rows, and environment URLs that already match.
 
 The `reference/superapp-jamaica-api-contract-drift.md` file and `tools/api-drift/render-reference.ts` remain for optional offline canvas rendering, not for automatic audit output.
 

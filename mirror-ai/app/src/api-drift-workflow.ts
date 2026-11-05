@@ -5,7 +5,7 @@ import type { ComparisonMode } from "./types.ts";
 /**
  * Canonical full-market workflow from superapp-workspace
  * (`docs/10-api-contract-drift.md`, branch `feature/api-contract-drift-v2`).
- * The api-skill pass reads this at runtime so section 4 is always discovered
+ * The api-skill pass reads this at runtime so section 3 is always discovered
  * from the pinned Android/iOS checkouts, never from a baked-in market report.
  */
 export const API_DRIFT_WORKFLOW = "prompts/references/api-contract-drift-workflow.md";
@@ -43,7 +43,7 @@ export function apiDriftScopeNote(mode: ComparisonMode): string {
       "## Scope for this run — full market",
       "",
       "Inventory **every wired BFF path** in both checkouts at the pinned commits.",
-      "Follow the workflow's full-market discovery gates and tables (Meta, KPIs, inventory, baseline, stale, environment).",
+      "Follow the workflow's full-market discovery gates and tables (Meta, inventory, baseline, stale, environment).",
       "**Do not** paste rows from another market, an old `docs/reports/*.md`, or Mirror AI's `reference/` folder — only code you read in these two repos.",
     ].join("\n");
   }

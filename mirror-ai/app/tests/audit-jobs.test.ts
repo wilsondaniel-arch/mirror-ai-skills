@@ -98,7 +98,7 @@ test("a runner that throws fails its section, not the job", async () => {
   const job = jobs.start(request(["Catalog"]));
   while (!job.done) await tick();
   assert.equal(pass(job, 0, "ui-skill").state, "failed");
-  assert.match(pass(job, 0, "ui-skill").markdown ?? "", /### 3\. UI Difference\n\n\*\*This section could not be produced\.\*\* boom/);
+  assert.match(pass(job, 0, "ui-skill").markdown ?? "", /### 2\. UI Difference\n\n\*\*This section could not be produced\.\*\* boom/);
   assert.equal(pass(job, 0, "logic").state, "done");
   assert.equal(job.reference, "");
 });

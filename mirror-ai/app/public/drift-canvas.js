@@ -5,7 +5,7 @@
  * tint for the same contract value or drift tag everywhere.
  *
  * It takes the canvas's own data shape. The full-market snapshot arrives in it
- * directly; a module's section 4 is read out of its markdown by
+ * directly; a module's section 3 is read out of its markdown by
  * `parseDriftSection` first.
  */
 
@@ -277,7 +277,7 @@ function renderDriftCanvas(model) {
 }
 
 /**
- * Reads a module's "4. API Contract Drift" markdown into the canvas's data
+ * Reads a module's "3. API Contract Drift" markdown into the canvas's data
  * shape. Returns null when the section has no inventory table, so the page can
  * fall back to the markdown as written.
  */

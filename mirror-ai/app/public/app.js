@@ -36,6 +36,32 @@ let auditPoll = null;
  */
 let reportRun = 0;
 const MODE_KEY = "mirror-ai-comparison-mode";
+const EFFORT_KEY = "mirror-ai-audit-effort";
+const MODEL_KEY = "mirror-ai-audit-model";
+const DEFAULT_MODEL_VALUE = "";
+
+const FALLBACK_EFFORT_OPTIONS = [
+  { value: "low", label: "Low — cheapest Opus 5.5 tier" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High — default quality" },
+  { value: "xhigh", label: "Extra high" },
+  { value: "max", label: "Max" },
+];
+
+function fillEffortSelect(options, preferred) {
+  if (!effortSelect) return;
+  effortSelect.replaceChildren();
+  for (const option of options) {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    effortSelect.append(node);
+  }
+  const saved = typeof localStorage !== "undefined" ? localStorage.getItem(EFFORT_KEY) : null;
+  const pick = saved && [...effortSelect.options].some((node) => node.value === saved) ? saved : preferred || "high";
+  if ([...effortSelect.options].some((node) => node.value === pick)) effortSelect.value = pick;
+  syncModelHint();
+}
 
 if (byModuleEnum) {
   const saved = typeof localStorage !== "undefined" ? localStorage.getItem(MODE_KEY) : null;
@@ -109,20 +135,116 @@ iosBranch.addEventListener("change", () => {
   rememberBranch("ios");
 });
 
-const loadModelsButton = document.querySelector("#load-models");
+const effortSelect = document.querySelector("#effort-select");
+const modelSelect = document.querySelector("#model-select");
+const reloadModelsButton = document.querySelector("#reload-models");
+const modelHint = document.querySelector("#model-hint");
+const modelError = document.querySelector("#model-error");
 
-loadModelsButton.addEventListener("click", async () => {
-  const select = document.getElementById("model-select");
-  showLoading(select.loading, select, select.previousElementSibling);
+if (effortSelect) {
+  effortSelect.addEventListener("change", () => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(EFFORT_KEY, effortSelect.value);
+    syncModelHint();
+  });
+}
+if (modelSelect) {
+  modelSelect.addEventListener("change", () => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(MODEL_KEY, modelSelect.value);
+    syncModelHint();
+  });
+}
+if (reloadModelsButton) {
+  reloadModelsButton.addEventListener("click", () => void loadAuditModels(true));
+}
+
+function auditRequestOptions() {
+  const effort = effortSelect?.value || "high";
+  const cursorModel = modelSelect?.value?.trim();
+  const body = { effort };
+  if (cursorModel) body.cursorModel = cursorModel;
+  return body;
+}
+
+function syncModelHint() {
+  if (!modelHint) return;
+  const effort = effortSelect?.value || "high";
+  const picked = modelSelect?.value?.trim();
+  if (!picked) {
+    modelHint.textContent = `Default Opus 5.5 tier for this run: claude-opus-5-5-${effort === "low" || effort === "medium" ? effort : "high"}.`;
+    return;
+  }
+  modelHint.textContent = `This run uses ${picked} for every audit section.`;
+}
+
+function showModelError(message) {
+  if (!modelError) return;
+  if (message) {
+    modelError.hidden = false;
+    modelError.textContent = message;
+  } else {
+    modelError.hidden = true;
+    modelError.textContent = "";
+  }
+}
+
+function staleServerMessage(message) {
+  const text = String(message || "");
+  if (/run is not defined/i.test(text) || /not found/i.test(text)) {
+    return "Mirror AI server is out of date. Stop it (kill the pid in .cache/mirror-ai-serve.pid) and run npm run serve again.";
+  }
+  return text;
+}
+
+async function loadAuditDefaults() {
+  if (!effortSelect) return;
+  fillEffortSelect(FALLBACK_EFFORT_OPTIONS, "high");
+  try {
+    const response = await fetch("/api/audit-settings");
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Could not load audit settings.");
+    fillEffortSelect(payload.effortOptions?.length ? payload.effortOptions : FALLBACK_EFFORT_OPTIONS, payload.effort || "high");
+    showModelError("");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not load audit settings.";
+    showModelError(staleServerMessage(message));
+  }
+}
+
+async function loadAuditModels(force) {
+  if (!modelSelect) return;
+  if (modelSelect.dataset.loaded === "1" && !force) return;
+  showModelError("");
+  modelSelect.disabled = true;
   try {
     const response = await fetch("/api/models");
-    if (!response.ok) throw new Error(await response.text());
     const payload = await response.json();
-    fillSelect(select, payload.options, "");
+    if (!response.ok) throw new Error(payload.error || "Could not load models.");
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(MODEL_KEY) : null;
+    modelSelect.replaceChildren();
+    const defaultOption = document.createElement("option");
+    defaultOption.value = DEFAULT_MODEL_VALUE;
+    defaultOption.textContent = "Default — Opus 5.5 matches effort above";
+    modelSelect.append(defaultOption);
+    for (const option of payload.options || []) {
+      const node = document.createElement("option");
+      node.value = option.value;
+      node.textContent = option.label;
+      modelSelect.append(node);
+    }
+    if (saved && [...modelSelect.options].some((node) => node.value === saved)) {
+      modelSelect.value = saved;
+    } else {
+      modelSelect.value = DEFAULT_MODEL_VALUE;
+    }
+    modelSelect.disabled = false;
+    modelSelect.dataset.loaded = "1";
+    syncModelHint();
   } catch (error) {
-    updateModelError(error instanceof Error ? error.message : "Could not load models.");
+    modelSelect.disabled = false;
+    const message = error instanceof Error ? error.message : "Could not load models.";
+    showModelError(staleServerMessage(message));
   }
-});
+}
 
 function showLoading(loading, control, error) {
   if (loading) loading.hidden = false;
@@ -145,12 +267,6 @@ function showFieldError(loading, control, error, message) {
     error.hidden = false;
     error.textContent = message;
   }
-}
-
-function updateModelError(message) {
-  const select = document.getElementById("model-select");
-  if (!select.previousElementSibling) return;
-  select.previousElementSibling.textContent = message;
 }
 
 function choiceKey(value) {
@@ -320,10 +436,10 @@ function applyLaunchParams() {
 }
 
 applyLaunchParams();
+void loadAuditDefaults().then(() => loadAuditModels(false));
 void loadRepositoryChoices();
 
 async function watchAuditJob(jobId) {
-  clearInterval(auditPoll);
   setBusy(true);
   clearError();
   hide(modulesStep);
@@ -471,7 +587,7 @@ async function autoExportReport(view) {
   exportNote.textContent = "Saving this report as HTML and PDF…";
   const html = await printableReportHtml();
   if (run !== reportRun) return;
-  const saved = await post("/api/exports", { html, title: pdfFileName().replace(/\.pdf$/, "") });
+  const saved = await post("/api/exports", { html, title: pdfFileName().replace(/\.pdf$/, ""), sessionId });
   if (run !== reportRun) return;
   if (!saved || saved.error) {
     exportNote.textContent = `The report could not be saved: ${saved?.error || "no reply from the server"}.`;
@@ -554,6 +670,7 @@ async function compare(modules) {
     modules,
     mode: activeMode,
     refresh: refresh.checked,
+    ...auditRequestOptions(),
   });
   if (!job || job.error) {
     setBusy(false);
@@ -650,13 +767,13 @@ function drawAudit(job, view, modules, noun, started, repositoryScoped = false) 
 }
 
 /**
- * Section 2 shows the differences and nothing else: any prose the audit writes
+ * Section 1 shows the differences and nothing else: any prose the audit writes
  * around the matrix — an intro, a list of regression tests — is dropped. A
  * section with no table (a one-line "no differences") is left as written.
  */
 function matrixOnly(markdown) {
   const lines = markdown.split("\n");
-  const start = lines.findIndex((line) => /^\s*###\s+2\.\s/.test(line));
+  const start = lines.findIndex((line) => /^\s*###\s+1\.\s/.test(line));
   if (start < 0) return markdown;
   let end = lines.findIndex((line, at) => at > start && /^\s*#{1,3}\s/.test(line));
   if (end < 0) end = lines.length;
@@ -669,13 +786,13 @@ function matrixOnly(markdown) {
 }
 
 /**
- * Section 3 keeps its heading, the per-screen table, and each screen's
+ * Section 2 keeps its heading, the per-screen table, and each screen's
  * slot-by-slot layout cut down to its divergent rows. The intro, the coverage
  * table and the notes are dropped, and so is a layout with nothing divergent.
  */
 function uiOnly(markdown) {
   const lines = markdown.split("\n");
-  const start = lines.findIndex((line) => /^\s*###\s+3\.\s/.test(line));
+  const start = lines.findIndex((line) => /^\s*###\s+2\.\s/.test(line));
   if (start < 0) return markdown;
   let end = lines.findIndex((line, at) => at > start && /^\s*###\s+\d+\.\s/.test(line));
   if (end < 0) end = lines.length;
@@ -1378,7 +1495,7 @@ function uiScore(keys, cells) {
 }
 
 /**
- * Section 3 shows only the screens that differ: each one's screenshots, then
+ * Section 2 shows only the screens that differ: each one's screenshots, then
  * its name and its biggest difference. Screens that agree are left out.
  */
 function renderUiTable(keys, body) {

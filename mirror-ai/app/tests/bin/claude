@@ -21,4 +21,4 @@ try {
 invocations.push(entry);
 fs.writeFileSync(log, JSON.stringify(invocations));
 ' -- "$@"
-printf '%s' '{"is_error":false,"num_turns":12,"result":"### 1. Executive Summary\n\nStub audit of the Catalog module."}'
+printf '%s' '{"is_error":false,"num_turns":12,"result":"### 1. Business Logic Difference Matrix\n\nStub audit of the Catalog module."}'

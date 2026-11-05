@@ -1,5 +1,12 @@
 #!/bin/bash
 # Stands in for the Cursor Agent CLI in tests.
+if [[ "$1" == "--list-models" ]]; then
+  echo "Available models"
+  echo ""
+  echo "claude-opus-5-5-low - Claude Opus 5.5 1M Low"
+  echo "claude-opus-5-5-high - Claude Opus 5.5 1M High"
+  exit 0
+fi
 if [[ "$1" == "--version" ]] || [[ "$1" == "-v" ]]; then
   echo "0.0.0-stub (Cursor Agent)"
   exit 0
@@ -14,6 +21,6 @@ if [[ "$1" == "status" ]] || [[ "$1" == "whoami" ]]; then
 fi
 export MIRROR_AI_CURSOR_AGENT_LOG="${MIRROR_AI_CURSOR_AGENT_LOG:-/tmp/mirror-ai-agent.log}"
 node -e 'require("fs").writeFileSync(process.env.MIRROR_AI_CURSOR_AGENT_LOG, JSON.stringify(process.argv.slice(1)))' -- "$@"
-printf '%s' "### 1. Executive Summary
+printf '%s' "### 1. Business Logic Difference Matrix
 
 Stub audit of the Catalog module."

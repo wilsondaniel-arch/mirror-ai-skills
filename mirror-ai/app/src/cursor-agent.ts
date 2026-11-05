@@ -57,11 +57,13 @@ export interface CursorAgentRun {
   cwd: string;
   addDir: string;
   effort: string;
+  /** When set, used as `--model` instead of deriving from effort. */
+  model?: string;
   timeoutMs: number;
 }
 
 export function runCursorAgent(request: CursorAgentRun): Promise<string> {
-  const model = resolveCursorModel(request.effort);
+  const model = request.model?.trim() || resolveCursorModel(request.effort);
   const fullPrompt = [request.systemAppend, "", request.prompt].filter(Boolean).join("\n");
   const args = [
     "-p",

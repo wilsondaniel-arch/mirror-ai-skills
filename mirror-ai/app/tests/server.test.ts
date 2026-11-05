@@ -74,7 +74,7 @@ function sse(text: string): string {
 }
 
 test("the page lists enum modules in three groups and compares the ticked ones", async () => {
-  const claude = await startFakeClaude("### 1. Executive Summary\n\nNo mismatches in the stub.");
+  const claude = await startFakeClaude("### 1. Business Logic Difference Matrix\n\nNo mismatches in the stub.");
   const cliLog = path.join(root, "tests/.claude-args.log");
   const saved = {
     baseUrl: process.env.ANTHROPIC_BASE_URL,
@@ -113,6 +113,8 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     assert.match(html, /Common modules/);
     assert.match(html, /Android only/);
     assert.match(html, /iOS only/);
+    assert.match(html, /Audit model/);
+    assert.match(html, /Effort/);
     assert.match(html, /Find differences/);
     assert.match(html, /Download PDF/);
     // Everything below the two repositories is the module list and nothing else.
@@ -169,7 +171,7 @@ test("the page lists enum modules in three groups and compares the ticked ones",
       modules: ["catalog"],
     });
     assert.match(catalog.markdown, /# Business logic audit — Catalog/);
-    assert.match(catalog.markdown, /### 1\. Executive Summary/);
+    assert.match(catalog.markdown, /### 1\. Business Logic Difference Matrix/);
 
     // One request per section — the business logic and each skill — each
     // carrying the spec as a cached system prompt and the module's real source
@@ -238,7 +240,7 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     for (const pass of polled.modules[0].passes) {
       assert.equal(pass.state, "done");
       assert.equal(pass.cached, true, "saved sections are served without a run");
-      assert.match(pass.markdown, /### 1\. Executive Summary/);
+      assert.match(pass.markdown, /### 1\. Business Logic Difference Matrix/);
     }
     assert.equal(polled.reference, "");
     assert.equal(claude.requests.length, sections * 2, "a polled replay must not call the API again");
