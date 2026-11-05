@@ -1,0 +1,73 @@
+name: telco-apps-mirror-audit-report
+description: "Mirror AI for LLA telco Android/iOS apps (any market: Panama, CWC
+  SuperApp, MyLiberty PR, Ooredoo, etc.). Index → parity-report (md, html, pdf,
+  identical to the local Mirror AI tool) → TER Jira. Budget runner: Haiku 5.5
+  scan + Sonnet 5.5 verify, capped by MIRROR_AI_BUDGET_USD. Set MIRROR_AI_MARKET
+  / branch via secrets; pass android_repo and ios_repo paths for the pair."
+inputs:
+  android_repo:
+    description: Android app repo path under the session workspace (e.g.
+      repos/lla-panama-android, repos/lla-superapp-android,
+      repos/lla_panama_android).
+    required: true
+    type: string
+  ios_repo:
+    description: iOS app repo path under the session workspace (e.g.
+      repos/lla-panama-ios, repos/lla-superapp-ios, repos/lla_panama_ios).
+    required: true
+    type: string
+stages:
+  - name: index
+    gate: auto
+    agent: telco-mobile-apps-telco-apps-telco-mirror-ai-indexer
+    optional: true
+    task: >-
+      Run these shell commands from the session workspace root, exactly as
+      written, and do nothing else. Do not read the repositories yourself.
+
+      SKILL=""; for d in "$HOME/.agents/skills/mirror-ai" "$HOME/.cursor/skills/mirror-ai" "${CURSOR_SKILL_DIR:-}"; do [ -n "$d" ] && [ -x "$d/scripts/bootstrap.sh" ] && SKILL="$d" && break; done;
+      [ -n "$SKILL" ] || { npx skills add wilsondaniel-arch/mirror-ai-skills@mirror-ai -g -y && SKILL="$HOME/.agents/skills/mirror-ai"; };
+      APP="$("$SKILL/scripts/bootstrap.sh" | tail -1)";
+      "$APP/scripts/ark-audit.sh" index "{{inputs.params.android_repo}}" "{{inputs.params.ios_repo}}" .
+
+      Done when modules-index.json exists in the workspace root. Report the
+      number of common, Android-only and iOS-only modules it lists.
+
+  - name: audit
+    gate: auto
+    agent: telco-apps-telco-mirror-ai-auditor
+    depends_on:
+      - index
+    task: >-
+      Run these shell commands from the session workspace root, exactly as
+      written, and do nothing else. Do not read the repositories, and do not
+      edit, shorten or rewrite any report file: the Mirror AI tool writes the
+      report, so it matches a local run exactly.
+
+      SKILL=""; for d in "$HOME/.agents/skills/mirror-ai" "$HOME/.cursor/skills/mirror-ai" "${CURSOR_SKILL_DIR:-}"; do [ -n "$d" ] && [ -x "$d/scripts/bootstrap.sh" ] && SKILL="$d" && break; done;
+      [ -n "$SKILL" ] || { npx skills add wilsondaniel-arch/mirror-ai-skills@mirror-ai -g -y && SKILL="$HOME/.agents/skills/mirror-ai"; };
+      APP="$("$SKILL/scripts/bootstrap.sh" | tail -1)";
+      "$APP/scripts/ark-audit.sh" audit "{{inputs.params.android_repo}}" "{{inputs.params.ios_repo}}" .
+
+      The script honours MIRROR_AI_BRANCH, MIRROR_AI_MARKET, MIRROR_AI_MODULE /
+      MIRROR_AI_MODULES / MIRROR_AI_COMMON (none set = whole project) and the
+      budget secrets. It can run for 20-90 minutes; let it finish. Done when
+      parity-report.md exists in the workspace root (parity-report.html and
+      parity-report.pdf beside it; the PDF needs Chrome on this machine).
+      Report the last "Budget:" or "API-equivalent usage" line it printed, and
+      any module the report says "could not be produced".
+
+  - name: jira
+    gate: auto
+    agent: telco-apps-telco-mirror-ai-jira
+    depends_on:
+      - audit
+    task: Create a Jira task from parity-report.md (Atlassian MCP). Market from
+      MIRROR_AI_MARKET; repos {{inputs.params.android_repo}} (Android) vs
+      {{inputs.params.ios_repo}} (iOS). Follow mirror-ai skill summary/labels
+      and MIRROR_AI_JIRA_* secrets. The report is large, so the description
+      lists only the rows whose Severity is High from each module's "Business
+      Logic Difference Matrix", each with its ID, module, business area and
+      citations, plus the module count and a one-line usage note. Attach
+      parity-report.pdf, parity-report.html and parity-report.md unchanged.
+      Write jira-summary.md with issue key and link.

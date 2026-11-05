@@ -91,3 +91,18 @@ From the Mirror AI source repo:
 ./scripts/package-for-skill.sh
 cd skills && git add -A && git commit -m "chore: refresh bundled app" && git push
 ```
+
+## Running in a pipeline (Ark flow)
+
+`ark/telco-apps-mirror-audit-report.yaml` is the Ark flow definition. Its stages run
+`app/scripts/ark-audit.sh` (installed to `~/.mirror-ai/scripts/` by `scripts/bootstrap.sh`):
+
+```bash
+~/.mirror-ai/scripts/ark-audit.sh index <android_repo> <ios_repo> <out_dir>   # modules-index.json
+~/.mirror-ai/scripts/ark-audit.sh audit <android_repo> <ios_repo> <out_dir>   # parity-report.md/.html/.pdf
+```
+
+It uses the same settings as the local tool (Haiku 5.5 scan ×8 chunks, Sonnet 5.5 verify,
+40000 snippet tokens, $5 cap). With `ANTHROPIC_API_KEY` (a Console key), it runs on the Batch API
+with a hard dollar cap. Without one, it uses the signed-in `claude` CLI. Needs Node 22+;
+Chrome is only needed for the PDF.

@@ -53,6 +53,14 @@ if [ "$MODE" = "index" ]; then
 fi
 
 export MIRROR_AI_RUNNER=budget
+# The settings the local reports are made with, so a pipeline run reads the
+# same code with the same models and produces the same report. Any of them can
+# still be overridden by the pipeline's own environment or secrets.
+export MIRROR_AI_BUDGET_USD="${MIRROR_AI_BUDGET_USD:-5}"
+export MIRROR_AI_SCAN_MODEL="${MIRROR_AI_SCAN_MODEL:-claude-haiku-5-5}"
+export MIRROR_AI_VERIFY_MODEL="${MIRROR_AI_VERIFY_MODEL:-claude-sonnet-5-5}"
+export MIRROR_AI_SCAN_CHUNKS="${MIRROR_AI_SCAN_CHUNKS:-8}"
+export MIRROR_AI_VERIFY_SNIPPET_TOKENS="${MIRROR_AI_VERIFY_SNIPPET_TOKENS:-40000}"
 SELECT=()
 WANTED="${MIRROR_AI_MODULES:-${MIRROR_AI_MODULE:-}}"
 if [ -n "$WANTED" ]; then
@@ -65,6 +73,7 @@ fi
 
 LOG="$OUT/mirror-ai-run.log"
 {
+  echo "settings: scan ${MIRROR_AI_SCAN_MODEL} x${MIRROR_AI_SCAN_CHUNKS} chunks, verify ${MIRROR_AI_VERIFY_MODEL} ${MIRROR_AI_VERIFY_SNIPPET_TOKENS} snippet tokens, cap \$${MIRROR_AI_BUDGET_USD}, transport $([ -n "${ANTHROPIC_API_KEY:-}" ] && echo batch || echo claude-cli)"
   echo "market: ${MIRROR_AI_MARKET:-unset}"
   echo "android: $ANDROID"
   echo "ios: $IOS"
