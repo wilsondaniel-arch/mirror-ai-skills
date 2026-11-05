@@ -934,7 +934,7 @@ async function cliRequest(
 }
 
 function cliError(detail: string): Error {
-  if (/usage limit|limit reached|limit will reset|out of (extra )?usage|credit balance/i.test(detail)) {
+  if (/usage limit|limit reached|limit will reset|hit your [\w -]*limit|resets \d|out of (extra )?usage|credit balance/i.test(detail)) {
     return new PlanLimitError(
       `Your Claude plan's usage limit was reached (${detail.slice(0, 160)}). Run the audit again after the limit resets — finished modules are saved and are not redone.`,
     );
