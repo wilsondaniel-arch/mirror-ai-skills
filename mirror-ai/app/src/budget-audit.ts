@@ -836,6 +836,7 @@ async function runViaCli(
       const request = requests[next++];
       if (planLimit) {
         outcomes.set(request.custom_id, { error: planLimit });
+        onResult(request.custom_id, { error: planLimit });
         continue;
       }
       try {
@@ -844,7 +845,12 @@ async function runViaCli(
         onResult(request.custom_id, outcome);
       } catch (error) {
         if (error instanceof PlanLimitError) planLimit = error.message;
-        outcomes.set(request.custom_id, { error: error instanceof Error ? error.message : "The claude CLI call failed." });
+        const failed = { error: error instanceof Error ? error.message : "The claude CLI call failed." };
+        outcomes.set(request.custom_id, failed);
+        // Callers record problems as results arrive; a failure must reach them too,
+        // or the report says "no result" and the real cause is lost.
+        onResult(request.custom_id, failed);
+        console.error(`[budget] ${stage}: ${request.custom_id} failed: ${failed.error.slice(0, 400)}`);
       }
       done++;
       if (done % 10 === 0 || done === requests.length) console.log(`[budget] ${stage}: ${done}/${requests.length} done.`);
