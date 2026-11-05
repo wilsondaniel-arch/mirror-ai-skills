@@ -61,6 +61,36 @@ export MIRROR_AI_SCAN_MODEL="${MIRROR_AI_SCAN_MODEL:-claude-haiku-5-5}"
 export MIRROR_AI_VERIFY_MODEL="${MIRROR_AI_VERIFY_MODEL:-claude-sonnet-5-5}"
 export MIRROR_AI_SCAN_CHUNKS="${MIRROR_AI_SCAN_CHUNKS:-8}"
 export MIRROR_AI_VERIFY_SNIPPET_TOKENS="${MIRROR_AI_VERIFY_SNIPPET_TOKENS:-40000}"
+
+# Model access: a Console key uses the Batch API; otherwise the `claude` CLI
+# runs on the subscription login (CLAUDE_CODE_OAUTH_TOKEN on a pipeline box).
+# Install the CLI into the app folder if this box does not have it.
+TOOLS="$APP/.tools"
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && ! command -v claude >/dev/null 2>&1; then
+  if [ ! -x "$TOOLS/claude/node_modules/.bin/claude" ]; then
+    echo "Installing the claude CLI into $TOOLS/claude" >&2
+    npm install --silent --no-audit --no-fund --prefix "$TOOLS/claude" @anthropic-ai/claude-code >&2
+  fi
+  export PATH="$TOOLS/claude/node_modules/.bin:$PATH"
+fi
+if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && ! claude auth status >/dev/null 2>&1; then
+  echo "warning: no ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN, and the claude CLI is not signed in; the audit will fail to reach Claude." >&2
+fi
+
+# PDF: print with any installed Chrome/Chromium; on a box without one, fetch a
+# headless Chrome into the app folder. Without it the report is still md+html.
+if [ -z "${MIRROR_AI_CHROME:-}" ] && [ "$(uname -s)" != "Darwin" ] \
+  && ! command -v google-chrome >/dev/null 2>&1 && ! command -v google-chrome-stable >/dev/null 2>&1 \
+  && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+  CHROME_BIN="$(find "$TOOLS/chrome" -type f -name chrome-headless-shell 2>/dev/null | head -1)"
+  if [ -z "$CHROME_BIN" ]; then
+    echo "Fetching a headless Chrome for the PDF into $TOOLS/chrome" >&2
+    npx -y @puppeteer/browsers install chrome-headless-shell@stable --path "$TOOLS/chrome" >&2 || true
+    CHROME_BIN="$(find "$TOOLS/chrome" -type f -name chrome-headless-shell 2>/dev/null | head -1)"
+  fi
+  [ -n "$CHROME_BIN" ] && export MIRROR_AI_CHROME="$CHROME_BIN"
+fi
+
 SELECT=()
 WANTED="${MIRROR_AI_MODULES:-${MIRROR_AI_MODULE:-}}"
 if [ -n "$WANTED" ]; then
