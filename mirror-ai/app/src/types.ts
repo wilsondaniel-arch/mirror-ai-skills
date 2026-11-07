@@ -87,7 +87,16 @@ export interface ModuleDef {
   id: string;
   label: string;
   keywords: string[];
+  /**
+   * The exact files to read, per platform (paths relative to each repo root),
+   * for a module that is not found by keywords — the whole-project audit's
+   * Miscellaneous section. When set, `keywords` is not used to pick files.
+   */
+  files?: { android: string[]; ios: string[] };
 }
+
+/** Id of the whole-project audit's last section: code no common module claims. */
+export const MISC_MODULE_ID = "miscellaneous";
 
 /** Module-by-enum (default UI) or a single whole-repository audit. */
 export type ComparisonMode = "module" | "repository";

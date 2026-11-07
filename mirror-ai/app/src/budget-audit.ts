@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import path from "node:path";
 import { codegraphEnabled, rankFilesForKeywords } from "./codegraph.ts";
 import { findHardcodedCopy, hardcodedCopySection } from "./hardcoded-copy.ts";
+import { miscFileScore } from "./misc-scope.ts";
 import { checkoutInfo } from "./report-store.ts";
 import { readSources, type RepoSource } from "./scan.ts";
 import type { AuditPass, AuditRequest } from "./audit.ts";
@@ -372,7 +373,8 @@ export function focusBody(body: string, needles: string[]): { body: string; exce
   return focused.length < body.length ? { body: focused, excerpted: true } : { body, excerpted: false };
 }
 
-export function rankSide(platform: Side["platform"], root: string, keywords: string[]): Side {
+export function rankSide(platform: Side["platform"], root: string, keywords: string[], only?: string[]): Side {
+  if (only) return listedSide(platform, root, only);
   const needles = keywords.map((keyword) => keyword.toLowerCase()).filter(Boolean);
   const sources = readSources(root).filter((source) => !isTestFile(source.relativePath));
   const scored = new Map<string, { source: RepoSource; score: number; named: boolean }>();
@@ -418,6 +420,26 @@ export function rankSide(platform: Side["platform"], root: string, keywords: str
       if (named || compact.body.length < FOCUS_ABOVE_CHARS) return { source, ...compact };
       return { source, lines: compact.lines, ...focusBody(compact.body, needles) };
     }),
+  };
+}
+
+/**
+ * A side made of exactly these files (the Miscellaneous section), business
+ * logic and network code first, then by path. There is no module name to
+ * focus on, so whole compacted files are kept; what the budget cannot fit is
+ * listed as unread in the coverage note.
+ */
+function listedSide(platform: Side["platform"], root: string, files: string[]): Side {
+  const wanted = new Set(files);
+  const ordered = readSources(root)
+    .filter((source) => wanted.has(source.relativePath))
+    .map((source) => ({ source, score: miscFileScore(source) }))
+    .sort((left, right) => right.score - left.score || left.source.relativePath.localeCompare(right.source.relativePath));
+  return {
+    platform,
+    root,
+    matched: ordered.length,
+    files: ordered.map(({ source }) => ({ source, ...compactSource(source.text), excerpted: false })),
   };
 }
 
@@ -643,6 +665,7 @@ function appendCopyTable(sections: Record<string, string>, specs: PassSpec[], it
 }
 
 function moduleBrief(request: AuditRequest, def: ModuleDef, row: ModuleRow | null): string {
+  if (def.files) return miscBrief(request, def);
   const lines = [`Module: **${def.label}** (enum constant \`${def.id.toUpperCase()}\`).`];
   for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]] as const) {
     const { branch, commit } = checkoutInfo(root);
@@ -659,6 +682,21 @@ function moduleBrief(request: AuditRequest, def: ModuleDef, row: ModuleRow | nul
       : "- iOS does not declare this module in its module enum.",
   );
   lines.push(`- Search terms used to select files: ${def.keywords.join(", ")}.`);
+  return lines.join("\n");
+}
+
+/** Brief for the Miscellaneous section, which has no enum constant or search terms. */
+function miscBrief(request: AuditRequest, def: ModuleDef): string {
+  const lines = [
+    `Module: **${def.label}** — the code no common module claims.`,
+    "- It holds code of modules only one platform declares, of modules that are missing from or badly defined in the module enum, and code that belongs to no module.",
+    "- Pair Android and iOS code by what it does (screen, flow, endpoint, rule), not by name. Report business logic, UI and API differences as for any module; code with no counterpart on the other platform is itself a finding.",
+  ];
+  for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]] as const) {
+    const { branch, commit } = checkoutInfo(root);
+    if (commit) lines.push(`- ${platform} checkout: branch \`${branch || "detached"}\` @ \`${commit}\`.`);
+  }
+  lines.push(`- Files: ${def.files?.android.length ?? 0} Android, ${def.files?.ios.length ?? 0} iOS.`);
   return lines.join("\n");
 }
 
@@ -1089,8 +1127,8 @@ async function auditOnce(
   const sides = defs.map((def) => ({
     def,
     row: request.rows.find((item) => item.key === def.id) ?? null,
-    android: rankSide("Android", request.androidPath, def.keywords),
-    ios: rankSide("iOS", request.iosPath, def.keywords),
+    android: rankSide("Android", request.androidPath, def.keywords, def.files?.android),
+    ios: rankSide("iOS", request.iosPath, def.keywords, def.files?.ios),
   }));
   const sample = sides.flatMap((side) => [...side.android.files, ...side.ios.files]).slice(0, 40).map((file) => file.body).join("\n");
   await calibrate(client, scanModel(), sample || scanSystem);

@@ -9,6 +9,7 @@ import { cloneRepository, validateBranch } from "./clone.ts";
 import { buildModuleCatalog, moduleDefs, moduleKey, type ModuleRow } from "./enums.ts";
 import { buildModuleLeadsMap } from "./leads-builder.ts";
 import { loadProjectEnv } from "./load-env.ts";
+import { miscellaneousDef } from "./misc-scope.ts";
 import { listSavedReports, reportsDir } from "./report-store.ts";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -90,8 +91,13 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const wanted = flags(argv, "--module");
-  const selected = argv.includes("--all") ? rows : argv.includes("--common") ? catalog.common : pick(rows, wanted);
+  // --module takes one name or a comma/space separated list, and may repeat.
+  const wanted = flags(argv, "--module").flatMap((value) => value.split(/[\s,]+/)).filter(Boolean);
+  const whole = argv.includes("--all");
+  // A whole-project audit runs every common module, then one Miscellaneous
+  // section for everything else: platform-only modules, modules missing from
+  // the enum, and code that belongs to no module.
+  const selected = whole ? catalog.common : argv.includes("--common") ? catalog.common : pick(rows, wanted);
   if (selected.length === 0) {
     console.error(
       wanted.length > 0
@@ -104,6 +110,13 @@ export async function main(argv: string[]): Promise<number> {
   for (const name of missing) note(`No module matched "${name}" — skipping it.`);
 
   const defs = moduleDefs(selected);
+  if (whole) {
+    const misc = miscellaneousDef(checkouts.androidPath, checkouts.iosPath, defs);
+    if (misc) {
+      defs.push(misc);
+      note(`Miscellaneous: ${misc.files?.android.length ?? 0} Android and ${misc.files?.ios.length ?? 0} iOS file(s) no common module claims.`);
+    }
+  }
   if (argv.includes("--estimate")) {
     note(`Estimating a budget audit of ${defs.length} module(s); nothing is spent.`);
     const estimate = await estimateBudget({
@@ -147,7 +160,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   // Every report is also kept as Markdown, HTML and PDF in its project's folder.
   const project = projectFolderName(checkouts.androidPath, checkouts.iosPath);
-  const scope = defs.length === rows.length ? "full-project" : defs.length === 1 ? defs[0].id : `${defs.length}-modules`;
+  const scope = whole ? "full-project" : defs.length === 1 ? defs[0].id : `${defs.length}-modules`;
   const title = `mirror-ai-${scope}-${new Date().toISOString().slice(0, 10)}`;
   const saved = await exportReport(projectRoot, markdownToHtml(markdown), title, project, markdown);
   const folder = path.relative(projectRoot, path.dirname(saved.html));
@@ -245,9 +258,11 @@ function usage(): string {
     "  --ios-branch <n>        Branch for iOS only",
     "",
     "  --list                  List every module, grouped, and stop (add --json for JSON)",
-    "  --module <id>           Module to audit, by constant or label. Repeat for more.",
+    "  --module <id>[,<id>]    Module(s) to audit, by constant or label. Comma-separated or repeated.",
+    "                          The report holds only those modules.",
     "  --common                Audit every module both platforms declare",
-    "  --all                   Audit every module, including platform-only ones",
+    "  --all                   Whole project: every common module, then a last Miscellaneous section",
+    "                          for platform-only modules, modules missing from the enum and unmapped code",
     "  --estimate              With the budget runner: plan the audit and print its cost; spend nothing",
     "  --out <file>            Write the report to a file instead of stdout",
     "  --refresh               Audit again even if a report was already saved",

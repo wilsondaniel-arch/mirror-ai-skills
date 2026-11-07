@@ -11,6 +11,7 @@ import {
   type ReportIdentity,
 } from "./report-store.ts";
 import { apiDriftScopeNote, readApiDriftWorkflow } from "./api-drift-workflow.ts";
+import { miscFileScore } from "./misc-scope.ts";
 import { readSources, type RepoSource } from "./scan.ts";
 import type { ModuleRow } from "./enums.ts";
 import type { ComparisonMode, ModuleDef } from "./types.ts";
@@ -395,6 +396,23 @@ function featureBrief(request: AuditRequest, def: ModuleDef, row: ModuleRow | nu
     }
     return lines.join("\n");
   }
+  if (def.files) {
+    const cap = 300;
+    const list = (files: string[]) => [...files.slice(0, cap).map((file) => `  - \`${file}\``), ...(files.length > cap ? [`  - …and ${files.length - cap} more`] : [])];
+    const lines = [
+      `Audit the **${def.label}** section: the code no common module claims.`,
+      "",
+      "It holds code of modules only one platform declares, of modules missing from or badly defined in the module enum, and code that belongs to no module. Pair Android and iOS code by what it does, not by name; code with no counterpart on the other platform is itself a finding.",
+      "",
+    ];
+    for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]]) {
+      const { branch, commit } = checkoutInfo(root);
+      if (commit) lines.push(`- ${platform} checkout: branch \`${branch || "detached"}\` @ \`${commit}\`.`);
+    }
+    lines.push(`- Android files (${def.files.android.length}):`, ...list(def.files.android));
+    lines.push(`- iOS files (${def.files.ios.length}):`, ...list(def.files.ios));
+    return lines.join("\n");
+  }
   const lines = [`Audit this module: **${def.label}** (enum constant \`${def.id.toUpperCase()}\`).`, ""];
   for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]]) {
     const { branch, commit } = checkoutInfo(root);
@@ -658,8 +676,8 @@ async function runApi(
 ): Promise<string> {
   const repositoryWide = request.mode === "repository";
   const needles = def.keywords.map((keyword) => keyword.toLowerCase());
-  const android = gatherEvidence(request.androidPath, needles, repositoryWide);
-  const ios = gatherEvidence(request.iosPath, needles, repositoryWide);
+  const android = gatherEvidence(request.androidPath, needles, repositoryWide, def.files?.android);
+  const ios = gatherEvidence(request.iosPath, needles, repositoryWide, def.files?.ios);
   if (android.included.length === 0 && ios.included.length === 0) {
     const reason =
       repositoryWide
@@ -739,12 +757,13 @@ function writeRepo(lines: string[], platform: string, root: string, evidence: Ev
 }
 
 /** Ranks matched files by keyword hits, or by path when auditing the whole repo. */
-function gatherEvidence(root: string, needles: string[], repositoryWide = false): Evidence {
+function gatherEvidence(root: string, needles: string[], repositoryWide = false, only?: string[]): Evidence {
   const matched: { source: RepoSource; hits: number }[] = [];
-  const sources = readSources(root);
+  const wanted = only ? new Set(only) : null;
+  const sources = wanted ? readSources(root).filter((source) => wanted.has(source.relativePath)) : readSources(root);
   const sourceByPath = new Map(sources.map((source) => [source.relativePath, source]));
 
-  if (codegraphEnabled() && !repositoryWide && needles.length > 0) {
+  if (codegraphEnabled() && !repositoryWide && !wanted && needles.length > 0) {
     const ranked = rankFilesForKeywords(root, needles);
     for (let index = 0; index < ranked.length; index++) {
       const source = sourceByPath.get(ranked[index]);
@@ -754,8 +773,8 @@ function gatherEvidence(root: string, needles: string[], repositoryWide = false)
 
   if (matched.length === 0) {
     for (const source of sources) {
-      if (repositoryWide) {
-        matched.push({ source, hits: 1 });
+      if (repositoryWide || wanted) {
+        matched.push({ source, hits: wanted ? miscFileScore(source) : 1 });
         continue;
       }
       let hits = 0;

@@ -9,9 +9,15 @@
 # Environment (all optional):
 #   MIRROR_AI_BRANCH                  branch for both repos (checked out before reading)
 #   MIRROR_AI_ANDROID_BRANCH / _IOS_BRANCH   per-platform override
-#   MIRROR_AI_MODULE / MIRROR_AI_MODULES     module ids or labels, comma or space separated
+#   MIRROR_AI_MODULE / MIRROR_AI_MODULES     module ids or labels, comma or space separated;
+#                                      the report holds only those modules
 #   MIRROR_AI_COMMON=1                 every module both apps declare
-#   (none of the three)                every module (whole project)
+#   (none of the three)                whole project: every common module, then a last
+#                                      Miscellaneous section (platform-only modules, modules
+#                                      missing from the enum, code that belongs to no module)
+#   <out_dir>/audit-scope.txt          read when none of the three is set (an Ark flow writes it
+#                                      from its inputs): "project", "common", or module names
+#                                      (override the path with MIRROR_AI_SCOPE_FILE)
 #   MIRROR_AI_MARKET                   recorded in the run log; the audit reads the market from code
 #   ANTHROPIC_API_KEY                  Batch API with a hard dollar cap (MIRROR_AI_BUDGET_USD, default 5);
 #                                      without it the signed-in `claude` CLI is used (subscription usage)
@@ -89,6 +95,19 @@ if [ -z "${MIRROR_AI_CHROME:-}" ] && [ "$(uname -s)" != "Darwin" ] \
     CHROME_BIN="$(ls -d "$TOOLS"/chrome/chrome-headless-shell/*/*/chrome-headless-shell 2>/dev/null | head -1 || true)"
   fi
   [ -n "$CHROME_BIN" ] && export MIRROR_AI_CHROME="$CHROME_BIN"
+fi
+
+# A pipeline's actions cannot take run inputs, so an earlier stage may leave
+# the choice in a file: "project" (or empty), "common", or module names.
+SCOPE_FILE="${MIRROR_AI_SCOPE_FILE:-$OUT/audit-scope.txt}"
+if [ -z "${MIRROR_AI_MODULES:-}${MIRROR_AI_MODULE:-}" ] && [ -z "${MIRROR_AI_COMMON:-}" ] && [ -f "$SCOPE_FILE" ]; then
+  SCOPE="$(tr -s ' ,\t\r\n' '  ' < "$SCOPE_FILE" | sed -E 's/^ +//; s/ +$//')"
+  case "$(printf '%s' "$SCOPE" | tr '[:upper:]' '[:lower:]')" in
+    ""|project|all|whole|whole-project|full-project) ;;
+    common|all-common) MIRROR_AI_COMMON=1 ;;
+    *) MIRROR_AI_MODULES="$SCOPE" ;;
+  esac
+  echo "scope from $SCOPE_FILE: ${SCOPE:-project}" >&2
 fi
 
 SELECT=()
