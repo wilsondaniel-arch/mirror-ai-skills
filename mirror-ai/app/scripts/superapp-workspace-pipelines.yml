@@ -1,0 +1,26 @@
+# Mirror AI dashboard refresh for superapp-workspace.
+#
+# Merge this step into superapp-workspace/bitbucket-pipelines.yml (under the
+# existing `pipelines:` key if there is one). Each app's PR only changes
+# reports/<app>/**; after it is merged, this step rebuilds the files every app
+# shares — reports/README.md, reports/dashboard.html, reports/index.json — on
+# main, so PRs from different apps never conflict on them. The commit carries
+# [skip ci], so it does not trigger itself.
+#
+# The generator needs nothing but Node 22.6+: it is plain TypeScript run with
+# --experimental-strip-types and has no npm dependencies.
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Mirror AI dashboard
+          image: node:22
+          condition:
+            changesets:
+              includePaths:
+                - "reports/**"
+          script:
+            - git clone --depth 1 https://github.com/wilsondaniel-arch/mirror-ai-skills.git /tmp/mirror-ai
+            - node --experimental-strip-types /tmp/mirror-ai/app/src/dashboard.ts reports
+            - git add reports/README.md reports/dashboard.html reports/index.json reports/*/README.md
+            - git diff --cached --quiet || (git commit -m "Mirror AI dashboard refresh [skip ci]" && git push origin HEAD:main)

@@ -4,7 +4,7 @@
 # makes — Markdown, HTML and PDF — in an output folder.
 #
 #   ark-audit.sh index <android_repo> <ios_repo> [out_dir]   -> modules-index.json
-#   ark-audit.sh audit <android_repo> <ios_repo> [out_dir]   -> parity-report.{md,html,pdf}
+#   ark-audit.sh audit <android_repo> <ios_repo> [out_dir]   -> parity-report.{md,html,pdf}, summary.json, run.json
 #
 # Environment (all optional):
 #   MIRROR_AI_BRANCH                  branch for both repos (checked out before reading)
@@ -158,6 +158,13 @@ if [ -n "$SAVED" ]; then
     if [ -f "$APP/$FOLDER/$NAME.$ext" ]; then cp "$APP/$FOLDER/$NAME.$ext" "$OUT/parity-report.$ext"; fi
   done
 fi
+
+# Numbers for the dashboard (summary.json) and where the run came from (run.json).
+if [ "${SELECT[0]}" = "--all" ]; then RUN_SCOPE=project; RUN_MODULES=""
+elif [ "${SELECT[0]}" = "--common" ]; then RUN_SCOPE=modules; RUN_MODULES=common
+else RUN_SCOPE=modules; RUN_MODULES="${WANTED//,/ }"; fi
+node --experimental-strip-types src/report-summary.ts "$OUT/parity-report.md" --out "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || echo "warning: summary.json not written" >&2
+node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "$RUN_MODULES" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
 
 echo "Report: $OUT/parity-report.md" >&2
 [ -f "$OUT/parity-report.html" ] && echo "HTML:   $OUT/parity-report.html" >&2
