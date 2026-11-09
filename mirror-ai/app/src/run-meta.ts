@@ -70,7 +70,9 @@ export function runFolderName(date: Date, meta: Pick<RunMeta, "scope" | "modules
 export interface RunJson extends RunMeta {
   folder: string;
   branchRef: string;
+  /** The HTML report: what dashboards, the PR and the Jira ticket link to. */
   reportUrl: string;
+  reportMdUrl: string;
 }
 
 export function buildRunMeta(input: {
@@ -104,7 +106,8 @@ export function buildRunMeta(input: {
     folder,
     branchRef,
     // Bitbucket picks the branch with ?at=, which copes with the slash in `<app>/reports`.
-    reportUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.md?at=${encodeURIComponent(branchRef)}`,
+    reportUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.html?at=${encodeURIComponent(branchRef)}`,
+    reportMdUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.md?at=${encodeURIComponent(branchRef)}`,
   };
 }
 

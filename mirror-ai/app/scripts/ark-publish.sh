@@ -144,7 +144,7 @@ const lines = [
   "",
   `${icon} score ${s.score ?? "—"} · High ${t.high} (${t.highConfirmed} confirmed) · Medium ${t.medium} · Low ${t.low} · API drift ${t.apiDrift} · ${t.modules} module(s)`,
   "",
-  `Report: [${folder}](${reportUrl})` + (r.jiraKey ? ` · Jira: ${r.jiraUrl ? `[${r.jiraKey}](${r.jiraUrl})` : r.jiraKey}` : ""),
+  `Report: [HTML](${reportUrl})` + (r.reportMdUrl ? ` · [md](${r.reportMdUrl})` : "") + ` (${folder})` + (r.jiraKey ? ` · Jira: ${r.jiraUrl ? `[${r.jiraKey}](${r.jiraUrl})` : r.jiraKey}` : ""),
 ];
 process.stdout.write(lines.join("\n"));
 ' "$ART/summary.json" "$PWD/$DEST/run.json" "$FOLDER" "$REPORT_URL")"

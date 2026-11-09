@@ -257,8 +257,14 @@ function scopeText(meta: RunMeta): string {
   return meta.scope === "project" ? "whole project" : `modules: ${(meta.modules ?? []).join(", ") || "—"}`;
 }
 
+/** The HTML report first (what people open), the Markdown beside it. */
+export function reportLinks(folderPath: string): string {
+  const base = encodeURI(folderPath);
+  return `[HTML](${base}/parity-report.html) · [md](${base}/parity-report.md)`;
+}
+
 function reportLink(app: AppIndex, run: RunEntry | null, base: string): string {
-  return run ? `[report](${base}${encodeURI(run.folder)}/parity-report.md)` : "—";
+  return run ? reportLinks(`${base}${run.folder}`) : "—";
 }
 
 function jiraLink(meta?: RunMeta): string {
@@ -319,7 +325,7 @@ export function renderAppReadme(app: AppIndex): string {
   for (const state of app.modules) {
     const failed = state.lastFailedAt ? ` (later run failed ${day(state.lastFailedAt)})` : "";
     lines.push(
-      `| ${cell(state.label)} | ${STATUS_ICON[state.status]} | ${state.score} | ${state.counts.high}/${state.counts.medium}/${state.counts.low} | ${state.counts.uiDivergent} | ${state.counts.apiDrift} | ${state.counts.hardcodedCopy} | ${pct(state.coverage)} | ${day(state.date)}${failed} | [report](${encodeURI(state.run)}/parity-report.md) |`,
+      `| ${cell(state.label)} | ${STATUS_ICON[state.status]} | ${state.score} | ${state.counts.high}/${state.counts.medium}/${state.counts.low} | ${state.counts.uiDivergent} | ${state.counts.apiDrift} | ${state.counts.hardcodedCopy} | ${pct(state.coverage)} | ${day(state.date)}${failed} | ${reportLinks(state.run)} |`,
     );
   }
 
@@ -332,7 +338,7 @@ export function renderAppReadme(app: AppIndex): string {
   else {
     lines.push("| Module | ID | Area | Confidence | Files | Report |", "|---|---|---|---|---|---|");
     for (const { state, item } of high) {
-      lines.push(`| ${cell(state.label)} | ${cell(item.id)} | ${cell(item.area)} | ${item.confidence} | ${cell(item.files.slice(0, 3).map((file) => `\`${file}\``).join(", "))} | [report](${encodeURI(state.run)}/parity-report.md) |`);
+      lines.push(`| ${cell(state.label)} | ${cell(item.id)} | ${cell(item.area)} | ${item.confidence} | ${cell(item.files.slice(0, 3).map((file) => `\`${file}\``).join(", "))} | ${reportLinks(state.run)} |`);
     }
   }
 
@@ -340,13 +346,13 @@ export function renderAppReadme(app: AppIndex): string {
   if (!app.miscellaneous) lines.push("No whole-project audit yet: Miscellaneous covers code that no common module claims.");
   else {
     const misc = app.miscellaneous;
-    lines.push(`${STATUS_ICON[misc.status]} score ${misc.score} · High ${misc.counts.high} (${misc.counts.highConfirmed} confirmed) · Medium ${misc.counts.medium} · Low ${misc.counts.low} · API drift ${misc.counts.apiDrift} · audited ${day(misc.date)} · [report](${encodeURI(misc.run)}/parity-report.md)`);
+    lines.push(`${STATUS_ICON[misc.status]} score ${misc.score} · High ${misc.counts.high} (${misc.counts.highConfirmed} confirmed) · Medium ${misc.counts.medium} · Low ${misc.counts.low} · API drift ${misc.counts.apiDrift} · audited ${day(misc.date)} · ${reportLinks(misc.run)}`);
   }
 
   lines.push("", "## Run history", "", "| Date | Scope | Branch | App score | New | Resolved | Persisting | Failed modules | Report | PR | Jira |", "|---|---|---|---|---|---|---|---|---|---|---|");
   for (const run of [...app.runs].reverse()) {
     lines.push(
-      `| ${run.meta.date.replace("T", " ").slice(0, 16)} | ${cell(scopeText(run.meta))} | ${run.meta.branch ? `\`${cell(run.meta.branch)}\`` : "—"} | ${run.appScore ?? "—"} | ${run.new} | ${run.resolved} | ${run.persisting} | ${run.failedModules.length ? cell(run.failedModules.join(", ")) : "—"} | [report](${encodeURI(run.folder)}/parity-report.md) | ${run.meta.prUrl ? `[PR](${run.meta.prUrl})` : "—"} | ${jiraLink(run.meta)} |`,
+      `| ${run.meta.date.replace("T", " ").slice(0, 16)} | ${cell(scopeText(run.meta))} | ${run.meta.branch ? `\`${cell(run.meta.branch)}\`` : "—"} | ${run.appScore ?? "—"} | ${run.new} | ${run.resolved} | ${run.persisting} | ${run.failedModules.length ? cell(run.failedModules.join(", ")) : "—"} | ${reportLinks(run.folder)} | ${run.meta.prUrl ? `[PR](${run.meta.prUrl})` : "—"} | ${jiraLink(run.meta)} |`,
     );
   }
   lines.push("");
