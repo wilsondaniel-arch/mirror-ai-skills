@@ -658,7 +658,13 @@ function copyTable(item: ModulePlan): string {
   );
 }
 
+/** MIRROR_AI_HARDCODED_COPY=off leaves the hard-coded copy check out of the report. */
+export function hardcodedCopyEnabled(): boolean {
+  return !/^(off|0|false|no)$/i.test(process.env.MIRROR_AI_HARDCODED_COPY?.trim() ?? "");
+}
+
 function appendCopyTable(sections: Record<string, string>, specs: PassSpec[], item: ModulePlan): Record<string, string> {
+  if (!hardcodedCopyEnabled()) return sections;
   const ui = uiPassId(specs);
   if (ui && sections[ui] !== undefined) sections[ui] = `${sections[ui]}\n\n${copyTable(item)}`;
   return sections;
