@@ -10,6 +10,7 @@ import { buildModuleCatalog, moduleDefs, moduleKey, type ModuleRow } from "./enu
 import { buildModuleLeadsMap } from "./leads-builder.ts";
 import { loadProjectEnv } from "./load-env.ts";
 import { miscellaneousDef } from "./misc-scope.ts";
+import { MISC_MODULE_ID } from "./types.ts";
 import { listSavedReports, reportsDir } from "./report-store.ts";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -92,13 +93,17 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   // --module takes one name or a comma/space separated list, and may repeat.
-  const wanted = flags(argv, "--module").flatMap((value) => value.split(/[\s,]+/)).filter(Boolean);
+  const named = flags(argv, "--module").flatMap((value) => value.split(/[\s,]+/)).filter(Boolean);
+  // "miscellaneous" is not a module of either app: it is the whole-project
+  // remainder, so it can be asked for on its own (to redo just that section).
+  const wantsMisc = named.some((name) => moduleKey(name) === moduleKey(MISC_MODULE_ID));
+  const wanted = named.filter((name) => moduleKey(name) !== moduleKey(MISC_MODULE_ID));
   const whole = argv.includes("--all");
   // A whole-project audit runs every common module, then one Miscellaneous
   // section for everything else: platform-only modules, modules missing from
   // the enum, and code that belongs to no module.
   const selected = whole ? catalog.common : argv.includes("--common") ? catalog.common : pick(rows, wanted);
-  if (selected.length === 0) {
+  if (selected.length === 0 && !wantsMisc) {
     console.error(
       wanted.length > 0
         ? `No module matched ${wanted.join(", ")}. Run with --list to see the names.`
@@ -110,8 +115,10 @@ export async function main(argv: string[]): Promise<number> {
   for (const name of missing) note(`No module matched "${name}" — skipping it.`);
 
   const defs = moduleDefs(selected);
-  if (whole) {
-    const misc = miscellaneousDef(checkouts.androidPath, checkouts.iosPath, defs);
+  if (whole || wantsMisc) {
+    // Unclaimed files are measured against every common module, not just the
+    // ones selected, so a Miscellaneous-only run covers what --all covers.
+    const misc = miscellaneousDef(checkouts.androidPath, checkouts.iosPath, whole ? defs : moduleDefs(catalog.common));
     if (misc) {
       defs.push(misc);
       note(`Miscellaneous: ${misc.files?.android.length ?? 0} Android and ${misc.files?.ios.length ?? 0} iOS file(s) no common module claims.`);

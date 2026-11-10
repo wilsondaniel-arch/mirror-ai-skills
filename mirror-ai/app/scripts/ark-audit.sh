@@ -112,9 +112,31 @@ fi
 
 SELECT=()
 WANTED="${MIRROR_AI_MODULES:-${MIRROR_AI_MODULE:-}}"
+
+# Completing an earlier run: when the output folder already holds a report of
+# these same commits (a restarted stage keeps the files of its last attempt)
+# and some of its modules could not be produced (a usage limit, a timeout),
+# redo only those modules and merge them into it. MIRROR_AI_FRESH=1 opts out.
+PREVIOUS_SCOPE=""
+if [ -z "${MIRROR_AI_FRESH:-}" ] && [ -f "$OUT/parity-report.md" ] && [ -f "$OUT/run.json" ]; then
+  SAME_CODE="$(ANDROID_HEAD="$(git -C "$ANDROID" rev-parse HEAD 2>/dev/null || true)" IOS_HEAD="$(git -C "$IOS" rev-parse HEAD 2>/dev/null || true)" node -e '
+    const run = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const same = run.android?.commit && run.android.commit === process.env.ANDROID_HEAD && run.ios?.commit === process.env.IOS_HEAD;
+    console.log(same ? [run.scope, ...(run.modules ?? [])].join(" ") : "");' "$OUT/run.json" 2>/dev/null || true)"
+  if [ -n "$SAME_CODE" ]; then
+    REDO="$(node --experimental-strip-types src/merge-report.ts --incomplete "$OUT" 2>/dev/null || true)"
+    if [ -n "$REDO" ]; then
+      PREVIOUS_SCOPE="$SAME_CODE"
+      WANTED="$REDO"
+      echo "completing the earlier report of these commits: redoing $REDO" >&2
+    else
+      echo "the earlier report of these commits is complete; rerunning in full" >&2
+    fi
+  fi
+fi
 # MIRROR_AI_SHARD=i/n audits every n-th module starting at the i-th (whole-project
 # order), so a long audit can run as n short pipeline sessions and be merged.
-if [ -z "$WANTED" ] && [ -n "${MIRROR_AI_SHARD:-}" ]; then
+if [ -z "$WANTED" ] && [ -z "$PREVIOUS_SCOPE" ] && [ -n "${MIRROR_AI_SHARD:-}" ]; then
   WANTED="$(npm run audit --silent -- --android "$ANDROID" --ios "$IOS" --list --json 2>/dev/null \
     | MIRROR_AI_SHARD="$MIRROR_AI_SHARD" node -e '
       const index = JSON.parse(require("fs").readFileSync(0, "utf8"));
@@ -147,6 +169,20 @@ HEARTBEAT=$!
 trap 'kill "$HEARTBEAT" 2>/dev/null || true' EXIT
 
 # The report is written by the tool, not by an agent, so it matches a local run exactly.
+if [ -n "$PREVIOUS_SCOPE" ]; then
+  npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/redone-modules.md" 2>&1 | tee -a "$LOG" >&2
+  node --experimental-strip-types src/merge-report.ts "$OUT" "$OUT/redone-modules.md" 2>&1 | tee -a "$LOG" >&2
+  rm -f "$OUT/redone-modules.md"
+  # The run keeps the scope it started with; only the missing modules were redone.
+  read -r RUN_SCOPE RUN_MODULES <<<"$PREVIOUS_SCOPE" || true
+  node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "${RUN_MODULES:-}" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
+  node -e '
+    const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const t = s.totals;
+    console.error(`${t.modules} module(s), ${t.incompleteModules} still incomplete, score ${s.score}, status ${s.status}, High ${t.high} (${t.highConfirmed} confirmed), Medium ${t.medium}, Low ${t.low}`);' "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || true
+  echo "Report: $OUT/parity-report.md" >&2
+  exit 0
+fi
 npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/parity-report.md" 2>&1 | tee -a "$LOG" >&2
 
 # The CLI also saved .md/.html/.pdf in "generated reports/<project>/"; copy the HTML and PDF next to the Markdown.

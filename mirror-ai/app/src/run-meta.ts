@@ -43,6 +43,20 @@ function git(root: string, args: string[]): string {
  */
 export function auditedBranch(root: string, explicit?: string): string {
   if (explicit?.trim()) return explicit.trim();
+  const session = (name: string) => /^s-[a-z0-9]{10}-/.test(name);
+  // Several remote branches can sit on the same commit (Sprint-21 and Sprint-22
+  // right after a cut), so first ask which branch this checkout came from: the
+  // local branch it was cloned on, or the reflog's move onto the session branch.
+  const local = git(root, ["branch", "--points-at", "HEAD", "--format=%(refname:short)"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !session(line) && !line.startsWith("("));
+  if (local.length === 1) return local[0];
+  const moved = git(root, ["reflog", "--format=%gs", "-n", "50"])
+    .split("\n")
+    .map((line) => /^checkout: moving from (\S+) to (\S+)$/.exec(line.trim()))
+    .find((match) => match && session(match[2]) && !session(match[1]) && !/^[0-9a-f]{7,40}$/.test(match[1]));
+  if (moved) return moved[1];
   const remote = git(root, ["branch", "-r", "--points-at", "HEAD"])
     .split("\n")
     .map((line) => line.trim())
