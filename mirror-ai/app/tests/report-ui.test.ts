@@ -57,3 +57,19 @@ test("renderReportUi builds tiles, tabs, cards and escapes report text", () => {
   assert.match(md, /### BL-01 · Retry/);
   assert.match(md, /\| HC-01 \| PayView \| Button \| iOS \| "Pagar" \| PayView.swift:9 \|/);
 });
+
+test("a BL row with Android and iOS in one cell keeps severity and confidence", () => {
+  const md = `# Business logic audit — Flow offers
+
+### 1. Business Logic Difference Matrix
+
+| ID | Business Area | Android Behavior | iOS Behavior | Business Impact | Severity | Confidence |
+|---|---|---|---|---|---|---|
+| BL-01 | Offers | Android does X (\`a/A.kt:1\`). iOS does Y (\`b/B.swift:2\`). | Offers differ. | High | Potential |
+`;
+  const { html, md: out } = renderReportUi(md);
+  assert.match(html, /badge badge-high">High/);
+  assert.match(html, /Android &amp; iOS/);
+  assert.match(html, /<strong>Impact:<\/strong> Offers differ\./);
+  assert.match(out, /\*\*High\*\* · Potential/);
+});

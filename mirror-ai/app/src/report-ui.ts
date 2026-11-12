@@ -204,7 +204,7 @@ const plain = (s: string) => String(s ?? "").replace(/\*\*/g, "").replace(/`/g, 
 
 // ─────────────────────────── model ───────────────────────────
 
-type BlRow = { id: string; area: string; android: string; ios: string; impact: string; severity: string; confidence: string };
+type BlRow = { id: string; area: string; android: string; ios: string; impact: string; severity: string; confidence: string; merged?: boolean };
 type HcRow = { id: string; screen: string; el: string; type: string; platform: string; text: string; file: string };
 type UiPair = { id: string; screen: string; pairing: string; androidN: string; iosN: string; matched: string; divergent: string; largest: string; slots: Table | null };
 
@@ -250,6 +250,23 @@ function parseBl(blocks: Block[]): { rows: BlRow[]; notes: Block[] } {
       };
       for (const r of t.rows) {
         if (!r[ix.id]) continue;
+        if (r.length < t.head.length && ix.severity === t.head.length - 2 && ix.confidence === t.head.length - 1) {
+          // A row with a missing cell (usually Android and iOS behaviour written in one cell).
+          // Severity, confidence and impact are always the last three cells, so read those from the right.
+          const n = r.length;
+          const middle = r.slice(2, Math.max(2, n - 3));
+          rows.push({
+            id: plain(r[0]),
+            area: r[1] ?? "",
+            android: middle[0] ?? "",
+            ios: middle.slice(1).join(" "),
+            impact: r[n - 3] ?? "",
+            severity: plain(r[n - 2] ?? ""),
+            confidence: plain(r[n - 1] ?? ""),
+            merged: middle.length < 2,
+          });
+          continue;
+        }
         rows.push({
           id: plain(r[ix.id]),
           area: r[ix.area] ?? "",
@@ -435,7 +452,7 @@ function blSection(v: ModuleView): string {
         `${v.mod.key}-${slug(r.id)}`,
         cardHead(r.id, plain(r.area) ? r.area : r.id),
         `<span class="badge ${sevClass(r.severity)}">${esc(r.severity || "—")}</span><span class="badge ${confClass(r.confidence)}">${esc(r.confidence || "—")}</span>`,
-        `${r.impact ? `<div class="impact-bar"><strong>Impact:</strong> ${inline(splitCitations(r.impact).prose)}</div>` : ""}<div class="split-view">${pane("Android", "android", r.android)}${pane("iOS", "ios", r.ios)}</div>`,
+        `${r.impact ? `<div class="impact-bar"><strong>Impact:</strong> ${inline(splitCitations(r.impact).prose)}</div>` : ""}<div class="split-view${r.merged ? " split-merged" : ""}">${r.merged ? pane("Android & iOS", "android", r.android) : pane("Android", "android", r.android) + pane("iOS", "ios", r.ios)}</div>`,
         n === 0,
       ),
     )
@@ -693,6 +710,7 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
   .split-code .path, .impact-bar .path { overflow-wrap: anywhere; word-break: break-word; }
   .impact-bar .path { display: block; margin-top: 6px; font-size: 12px; }
   .split-view { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+  .split-view.split-merged { grid-template-columns: minmax(0,1fr); }
   @media (max-width: 800px) { .split-view { grid-template-columns: minmax(0,1fr); } }
   .hc-filter-row input[type=search] { flex: 1 1 240px; max-width: 340px; border: 1px solid var(--border); border-radius: 100px; font: 400 15px var(--sans); padding: 9px 18px; color: var(--text-primary); background: #F6FAFD; }
   .hc-filter-row input[type=search]::placeholder { color: var(--text-tertiary); }
@@ -839,6 +857,10 @@ function renderReportUiMarkdown(views: ModuleView[], title: string, metaLine: st
         const a = splitCitations(r.android), i = splitCitations(r.ios);
         out.push(`### ${r.id} · ${plain(r.area)}`, "", `**${r.severity}** · ${r.confidence}`, "");
         if (r.impact) out.push(`**Impact:** ${splitCitations(r.impact).prose}`, "");
+        if (r.merged) {
+          out.push(`**Android & iOS**`, "", a.prose, ...a.paths.map((p) => `\`${p}\``), "");
+          continue;
+        }
         out.push(`**Android**`, "", a.prose || "_No counterpart in the audited source._", ...a.paths.map((p) => `\`${p}\``), "");
         out.push(`**iOS**`, "", i.prose || "_No counterpart in the audited source._", ...i.paths.map((p) => `\`${p}\``), "");
       }
