@@ -90,7 +90,11 @@ fi
 
 DEST="reports/$APP_ID/$FOLDER"
 mkdir -p "$DEST"
-for f in parity-report.md parity-report.html parity-report.pdf summary.json; do
+# Re-render the HTML (and PDF) in the current report UI from parity-report.md, so a
+# re-publish of an older run also gets the module-tile / tab design.
+node --experimental-strip-types "$APP/src/report-ui.ts" "$ART" --out "$ART/parity-report.html" --md "$ART/parity-report.ui.md" --pdf "$ART/parity-report.pdf" >&2 \
+  || echo "ark-publish: report UI not rendered; publishing the HTML as it is" >&2
+for f in parity-report.md parity-report.ui.md parity-report.html parity-report.pdf summary.json; do
   [ -f "$ART/$f" ] && cp "$ART/$f" "$DEST/$f"
 done
 cp "$RUN_JSON" "$DEST/run.json"

@@ -26,6 +26,7 @@ rsync -a \
   --exclude 'tests/.claude-args.log' \
   --exclude 'tests/.cli-report.md' \
   --exclude 'reports/fixture-comparison.stub.md' \
+  --exclude 'reports/*/' \
   --exclude '.env' \
   "$ROOT/" "$DEST/"
 

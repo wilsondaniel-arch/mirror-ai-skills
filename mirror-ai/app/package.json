@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/compare.test.ts tests/workflow.test.ts tests/enums.test.ts tests/source.test.ts tests/render.test.ts tests/skills.test.ts tests/report-store.test.ts tests/screenshots.test.ts tests/render-jobs.test.ts tests/audit-cli.test.ts tests/audit-models.test.ts tests/audit-settings.test.ts tests/cursor-agent.test.ts tests/codegraph.test.ts tests/server.test.ts tests/audit-jobs.test.ts tests/pdf.test.ts tests/budget-audit.test.ts tests/hardcoded-copy.test.ts tests/misc-scope.test.ts tests/report-summary.test.ts tests/merge-report.test.ts tests/dashboard.test.ts",
+    "test": "node --experimental-strip-types --test tests/compare.test.ts tests/workflow.test.ts tests/enums.test.ts tests/source.test.ts tests/render.test.ts tests/skills.test.ts tests/report-store.test.ts tests/screenshots.test.ts tests/render-jobs.test.ts tests/audit-cli.test.ts tests/audit-models.test.ts tests/audit-settings.test.ts tests/cursor-agent.test.ts tests/codegraph.test.ts tests/server.test.ts tests/audit-jobs.test.ts tests/pdf.test.ts tests/budget-audit.test.ts tests/hardcoded-copy.test.ts tests/misc-scope.test.ts tests/report-summary.test.ts tests/merge-report.test.ts tests/dashboard.test.ts tests/report-ui.test.ts",
     "serve": "node --experimental-strip-types src/server.ts",
     "audit": "node --experimental-strip-types src/audit-cli.ts",
     "compare": "node --experimental-strip-types src/cli.ts",
     "fixture": "node --experimental-strip-types src/cli.ts --android fixtures/android-app --ios fixtures/ios-app --full --out reports/fixture-comparison.md",
     "typecheck": "tsc --noEmit",
     "summarize": "node --experimental-strip-types src/report-summary.ts",
-    "dashboard": "node --experimental-strip-types src/dashboard.ts"
+    "dashboard": "node --experimental-strip-types src/dashboard.ts",
+    "report-ui": "node --experimental-strip-types src/report-ui.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

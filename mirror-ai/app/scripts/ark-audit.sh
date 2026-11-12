@@ -168,6 +168,12 @@ LOG="$OUT/mirror-ai-run.log"
 HEARTBEAT=$!
 trap 'kill "$HEARTBEAT" 2>/dev/null || true' EXIT
 
+# Report UI: parity-report.html (and .pdf) use the module-tile / tab design rendered from parity-report.md.
+render_report_ui() {
+  node --experimental-strip-types src/report-ui.ts "$OUT" --out "$OUT/parity-report.html" --md "$OUT/parity-report.ui.md" --pdf "$OUT/parity-report.pdf" 2>&1 | tee -a "$LOG" >&2 \
+    || echo "warning: report UI not rendered; parity-report.html keeps the plain layout" >&2
+}
+
 # The report is written by the tool, not by an agent, so it matches a local run exactly.
 if [ -n "$PREVIOUS_SCOPE" ]; then
   npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/redone-modules.md" 2>&1 | tee -a "$LOG" >&2
@@ -180,6 +186,7 @@ if [ -n "$PREVIOUS_SCOPE" ]; then
     const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const t = s.totals;
     console.error(`${t.modules} module(s), ${t.incompleteModules} still incomplete, score ${s.score}, status ${s.status}, High ${t.high} (${t.highConfirmed} confirmed), Medium ${t.medium}, Low ${t.low}`);' "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || true
+  render_report_ui
   echo "Report: $OUT/parity-report.md" >&2
   exit 0
 fi
@@ -201,6 +208,7 @@ elif [ "${SELECT[0]}" = "--common" ]; then RUN_SCOPE=modules; RUN_MODULES=common
 else RUN_SCOPE=modules; RUN_MODULES="${WANTED//,/ }"; fi
 node --experimental-strip-types src/report-summary.ts "$OUT/parity-report.md" --out "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || echo "warning: summary.json not written" >&2
 node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "$RUN_MODULES" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
+render_report_ui
 
 echo "Report: $OUT/parity-report.md" >&2
 [ -f "$OUT/parity-report.html" ] && echo "HTML:   $OUT/parity-report.html" >&2
