@@ -15,21 +15,39 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { RunMeta } from "./dashboard.ts";
+import { reportFolderName } from "./reports-home.ts";
 
 export const REPORTS_WEB_DEFAULT = "https://bitbucket.org/paytmteam/superapp-workspace";
 
-/** `superapp-caribbean` → `caribbean`; other markets are already folder-friendly. */
+/** `superapp-caribbean` → `caribbean`, MyLiberty / LCPR → `lcpr`; other markets are already folder-friendly. */
 export function appIdForMarket(market: string): string {
-  return market
+  const id = market
     .trim()
     .toLowerCase()
     .replace(/^superapp-/, "")
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "unknown";
+    .replace(/^-+|-+$/g, "");
+  if (/^(lcpr|myliberty)/.test(id)) return "lcpr";
+  return id || "unknown";
 }
 
-export function reportsBranch(appId: string): string {
-  return `${appId}/reports`;
+/** Every app publishes to one branch, under reports/<app>/ (override with MIRROR_AI_REPORTS_BRANCH). */
+export const REPORTS_BRANCH_DEFAULT = "reports/mirror-ai-reports-home";
+export function reportsBranch(_appId: string, env: NodeJS.ProcessEnv = process.env): string {
+  return env.MIRROR_AI_REPORTS_BRANCH?.trim() || REPORTS_BRANCH_DEFAULT;
+}
+
+/** Who ran the audit: MIRROR_AI_GENERATED_BY, else the git identity Ark gives the session (`wilson.daniel` → `Wilson Daniel`). */
+export function generatedBy(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.MIRROR_AI_GENERATED_BY?.trim();
+  if (explicit) return explicit;
+  const raw = env.GIT_AUTHOR_NAME?.trim() || (env.GIT_AUTHOR_EMAIL ?? "").split("@")[0];
+  if (!raw) return "unknown";
+  return raw
+    .split(/[._\s-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
 function git(root: string, args: string[]): string {
@@ -83,6 +101,7 @@ export function runFolderName(date: Date, meta: Pick<RunMeta, "scope" | "modules
 
 export interface RunJson extends RunMeta {
   folder: string;
+  generatedBy: string;
   branchRef: string;
   /** The HTML report: what dashboards, the PR and the Jira ticket link to. */
   reportUrl: string;
@@ -104,8 +123,9 @@ export function buildRunMeta(input: {
   const app = env.MIRROR_AI_APP_ID?.trim() || appIdForMarket(market);
   const { scope, modules } = input.scope ?? readScope(input.scopeFile);
   const session = env.WORKSPACE_ROOT ? path.basename(env.WORKSPACE_ROOT) : "";
-  const folder = runFolderName(now, { scope, modules }, /^s-[a-z0-9]+$/.test(session) ? session : "");
-  const branchRef = reportsBranch(app);
+  const who = generatedBy(env);
+  const folder = reportFolderName(app, { scope, modules, generatedBy: who, date: now.toISOString() });
+  const branchRef = reportsBranch(app, env);
   const web = (env.MIRROR_AI_REPORTS_WEB?.trim() || REPORTS_WEB_DEFAULT).replace(/\/+$/, "");
   return {
     app,
@@ -117,9 +137,10 @@ export function buildRunMeta(input: {
     android: { branch: auditedBranch(input.androidPath, env.MIRROR_AI_ANDROID_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.androidPath, ["rev-parse", "HEAD"]) },
     ios: { branch: auditedBranch(input.iosPath, env.MIRROR_AI_IOS_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.iosPath, ["rev-parse", "HEAD"]) },
     ...(session ? { sessionId: session } : {}),
+    generatedBy: who,
     folder,
     branchRef,
-    // Bitbucket picks the branch with ?at=, which copes with the slash in `<app>/reports`.
+    // Bitbucket picks the branch with ?at=, which copes with the slash in the branch name.
     reportUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.html?at=${encodeURIComponent(branchRef)}`,
     reportMdUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.md?at=${encodeURIComponent(branchRef)}`,
   };
