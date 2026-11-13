@@ -49,7 +49,14 @@ export function sprintOf(branch?: string): string {
   return m ? `Sprint-${m[1]}` : branch || "Unknown branch";
 }
 
-const fmtDate = (iso?: string) => (iso ? `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` : "—");
+/** Report time in IST (UTC+05:30), e.g. 2026-11-13 14:06 IST. */
+const fmtDate = (iso?: string) => {
+  if (!iso) return "—";
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return iso;
+  const ist = new Date(t.getTime() + (5 * 60 + 30) * 60_000).toISOString();
+  return `${ist.slice(0, 10)} ${ist.slice(11, 16)} IST`;
+};
 const what = (r: Run) => (r.scope === "project" || !r.modules?.length ? "ALL (full report)" : r.modules.join(", "));
 const enc = (p: string) => p.split("/").map(encodeURIComponent).join("/");
 const cell = (s: string) => s.replace(/\|/g, "\\|");
