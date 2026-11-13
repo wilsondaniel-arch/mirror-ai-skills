@@ -1,7 +1,8 @@
 /**
  * Builds the report indexes on superapp-workspace main:
  *
- *   reports/home.md          one row per app: its latest report
+ *   reports/home.md          one row per app: its latest report (also written as
+ *                            reports/README.md so Bitbucket shows it under the folder)
  *   reports/<app>/README.md  that app's reports grouped by sprint (branch),
  *                            newest sprint first, newest report first
  *
@@ -118,7 +119,10 @@ export function main(argv: string[]): number {
   const ids = k >= 0 ? argv[k + 1].split(",") : readdirSync(dir).filter((f) => statSync(path.join(dir, f)).isDirectory());
   const apps = ids.map((id) => ({ id, reports: readReports(path.join(dir, id)) }));
   for (const a of apps) writeFileSync(path.join(dir, a.id, "README.md"), appIndex(a.id, a.reports));
+  // home.md is the named index; README.md carries the same table because Bitbucket only
+  // renders a folder's README.* under its file listing.
   writeFileSync(path.join(dir, "home.md"), homeIndex(apps));
+  writeFileSync(path.join(dir, "README.md"), homeIndex(apps));
   console.error(`home.md + ${apps.length} app index(es) written in ${dir}`);
   return 0;
 }
