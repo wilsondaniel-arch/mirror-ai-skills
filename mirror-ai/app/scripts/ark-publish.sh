@@ -131,7 +131,7 @@ publish_once() {
   apps="$(cd reports && ls -d */ 2>/dev/null | tr -d / | paste -sd, -)"
   node --experimental-strip-types "$APP/src/reports-home.ts" reports --apps "$apps" \
     --base "$WEB/src/$REPORT_COMMIT/reports" --at "$BRANCH" >&2
-  git add reports/README.md reports/*/README.md
+  git add reports/README.md reports/README.html reports/*/README.md reports/*/README.html
   git diff --cached --quiet || git commit --quiet -m "reports: index with $APP_ID/$FOLDER"
 }
 
