@@ -17,6 +17,7 @@ import { gzipSync } from "node:zlib";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { branches, branchLabel } from "./branch-label.ts";
 
 export type Run = {
   app?: string;
@@ -60,6 +61,22 @@ export function sprintOf(branch?: string): string {
   return m ? `Sprint-${m[1]}` : branch || "Unknown branch";
 }
 
+/** Sprint group for a run: one sprint when both platforms agree, else `Android: Sprint-21 · iOS: Sprint-22`. */
+export function sprintOfRun(run: Run): string {
+  const { android, ios } = branches(run);
+  const a = sprintOf(android ?? ios), i = sprintOf(ios ?? android);
+  return a === i ? a : `Android: ${a} · iOS: ${i}`;
+}
+
+/** Branch cell: `release/x`, or Android: `a` · iOS: `b` when the platforms were on different branches. */
+const branchCell = (run: Run) => {
+  const { android, ios } = branches(run);
+  const c = (b: string) => `\`${cell(b)}\``;
+  if (android && ios && android !== ios) return `Android: ${c(android)} · iOS: ${c(ios)}`;
+  const one = branchLabel(run);
+  return one ? c(one) : "—";
+};
+
 /** Report time in IST (UTC+05:30), e.g. 2026-11-13 14:06 IST. */
 const fmtDate = (iso?: string) => {
   if (!iso) return "—";
@@ -100,7 +117,7 @@ export function appIndex(appId: string, reports: Report[]): string {
   out.push("Report name: `<App>-<Module | Module+N | ALL>-<Date>`. Latest sprint and latest report first.", "");
   const groups = new Map<string, Report[]>();
   for (const r of reports) {
-    const k = sprintOf(r.run.branch);
+    const k = sprintOfRun(r.run);
     groups.set(k, [...(groups.get(k) ?? []), r]);
   }
   for (const [sprint, list] of groups) {
@@ -109,7 +126,7 @@ export function appIndex(appId: string, reports: Report[]): string {
       const html = r.files.includes("parity-report.html") ? `[HTML](${url(`${appId}/${r.folder}/parity-report.html`, false, appId)})` : "";
       const md = r.files.includes("parity-report.md") ? `[MD](${url(`${appId}/${r.folder}/parity-report.md`, false, appId)})` : "";
       out.push(
-        `| [${cell(r.folder)}](${url(`${appId}/${r.folder}`, true, appId)}) | ${cell(r.run.generatedBy || "—")} | ${cell(what(r.run))} | \`${cell(r.run.branch || "—")}\` | ${fmtDate(r.run.date)} | ${r.run.jiraKey && r.run.jiraUrl ? `[${r.run.jiraKey}](${r.run.jiraUrl})` : "—"} | ${[html, md].filter(Boolean).join(" · ")} |`,
+        `| [${cell(r.folder)}](${url(`${appId}/${r.folder}`, true, appId)}) | ${cell(r.run.generatedBy || "—")} | ${cell(what(r.run))} | ${branchCell(r.run)} | ${fmtDate(r.run.date)} | ${r.run.jiraKey && r.run.jiraUrl ? `[${r.run.jiraKey}](${r.run.jiraUrl})` : "—"} | ${[html, md].filter(Boolean).join(" · ")} |`,
       );
     }
     out.push("");
@@ -133,7 +150,7 @@ export function homeIndex(apps: { id: string; reports: Report[] }[]): string {
       continue;
     }
     out.push(
-      `| [${appName(a.id)}](${url(a.id, true)}) | ${cell(r.folder)} | ${cell(r.run.generatedBy || "—")} | \`${cell(r.run.branch || "—")}\` | ${fmtDate(r.run.date)} | [HTML](${url(`${a.id}/${r.folder}/parity-report.html`)}) · [Folder](${url(a.id, true)}) |`,
+      `| [${appName(a.id)}](${url(a.id, true)}) | ${cell(r.folder)} | ${cell(r.run.generatedBy || "—")} | ${branchCell(r.run)} | ${fmtDate(r.run.date)} | [HTML](${url(`${a.id}/${r.folder}/parity-report.html`)}) · [Folder](${url(a.id, true)}) |`,
     );
   }
   out.push("");

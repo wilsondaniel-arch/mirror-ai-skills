@@ -16,6 +16,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { RunMeta } from "./dashboard.ts";
 import { reportFolderName } from "./reports-home.ts";
+import { branchLabel } from "./branch-label.ts";
 
 export const REPORTS_WEB_DEFAULT = "https://bitbucket.org/paytmteam/superapp-workspace";
 
@@ -168,7 +169,7 @@ export function main(argv: string[]): number {
       : undefined,
   });
   writeFileSync(path.join(outDir, "run.json"), `${JSON.stringify(meta, null, 2)}\n`);
-  console.error(`run.json: ${meta.app} · ${meta.scope}${meta.modules?.length ? ` (${meta.modules.join(", ")})` : ""} · ${meta.branch || "branch unknown"} · ${meta.reportUrl}`);
+  console.error(`run.json: ${meta.app} · ${meta.scope}${meta.modules?.length ? ` (${meta.modules.join(", ")})` : ""} · ${branchLabel(meta, { fallback: "branch unknown" })} · ${meta.reportUrl}`);
   return 0;
 }
 

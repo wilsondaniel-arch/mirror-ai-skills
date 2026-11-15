@@ -159,10 +159,12 @@ const fs = require("fs");
 const [summaryFile, runFile, folder, reportUrl] = process.argv.slice(1);
 const s = JSON.parse(fs.readFileSync(summaryFile, "utf8"));
 const r = JSON.parse(fs.readFileSync(runFile, "utf8"));
+const ab = r.android?.branch || r.branch, ib = r.ios?.branch || r.branch;
+const branchText = ab && ib && ab !== ib ? `Android \`${ab}\` · iOS \`${ib}\`` : `branch \`${ab || ib || "?"}\``;
 const icon = { red: "🔴", amber: "🟠", green: "🟢", grey: "⚪" }[s.status] || "";
 const t = s.totals;
 const lines = [
-  `**${r.app}** · ${r.scope === "project" ? "whole project" : (r.modules || []).join(", ")} · branch \`${r.branch || "?"}\` · ${r.date.slice(0, 16).replace("T", " ")} UTC`,
+  `**${r.app}** · ${r.scope === "project" ? "whole project" : (r.modules || []).join(", ")} · ${branchText} · ${r.date.slice(0, 16).replace("T", " ")} UTC`,
   "",
   `${icon} score ${s.score ?? "—"} · High ${t.high} (${t.highConfirmed} confirmed) · Medium ${t.medium} · Low ${t.low} · API drift ${t.apiDrift} · ${t.modules} module(s)`,
   "",

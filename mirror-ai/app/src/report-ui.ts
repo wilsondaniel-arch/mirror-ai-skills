@@ -13,6 +13,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { markdownToHtml } from "./markdown-html.ts";
+import { branchLabel } from "./branch-label.ts";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -20,7 +21,8 @@ type Table = { head: string[]; rows: string[][] };
 type Block = { kind: "table"; table: Table } | { kind: "text"; text: string } | { kind: "heading"; level: number; text: string };
 type Section = { title: string; blocks: Block[] };
 export type Module = { name: string; key: string; intro: Block[]; sections: Section[] };
-export type RunMeta = { branch?: string; android?: string; ios?: string; market?: string; date?: string };
+export type RunMeta = { branch?: string; androidBranch?: string; iosBranch?: string; android?: string; ios?: string; market?: string; date?: string };
+const metaBranch = (m: RunMeta) => ({ branch: m.branch, android: { branch: m.androidBranch }, ios: { branch: m.iosBranch } });
 
 const BARE_PATH_RE =
   /(?<![\w`/])(?:[\w@.+\-]+\/)+[\w@.+\-]+\.(?:kt|kts|java|swift|xml|json|plist|xcconfig|gradle|m|h|strings)(?::\d+(?:[-–]\d+)?(?:,\s?\d+(?:[-–]\d+)?)*)?(?![\w/])/g;
@@ -643,7 +645,7 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
   const { preamble, modules } = parseReport(markdown);
   const views = modules.map(buildView);
   const meta = opts.meta ?? {};
-  const sprint = meta.branch ? meta.branch.split("/").pop()! : "parity audit";
+  const sprint = branchLabel(metaBranch(meta), { short: true, fallback: "parity audit" });
   const nameList = modules.map((m) => m.name);
   const title = opts.title ?? `${nameList.length <= 3 ? nameList.join(" + ") : `${nameList.length}-module`} Business Logic Audit`;
 
@@ -716,7 +718,7 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
   .hc-filter-row input[type=search]::placeholder { color: var(--text-tertiary); }
   @media print { .site-header,.nav-tabs { position: static; } .section { display: block !important; page-break-before: always; } .diff-body { display: block !important; } .modules,.hc-filter-row,.sev-bar { display: none; } }
 `;
-  const metaLine = [meta.market, meta.branch, meta.android ? `android @ ${meta.android}` : "", meta.ios ? `ios @ ${meta.ios}` : "", meta.date].filter(Boolean).join(" · ");
+  const metaLine = [meta.market, branchLabel(metaBranch(meta)), meta.android ? `android @ ${meta.android}` : "", meta.ios ? `ios @ ${meta.ios}` : "", meta.date].filter(Boolean).join(" · ");
   const first = views[0]?.mod.key ?? "";
   const script = `
 const MODS = ${JSON.stringify(cfg)};
@@ -897,6 +899,8 @@ function readMeta(dir: string): RunMeta {
   try {
     const run = JSON.parse(readFileSync(path.join(dir, "run.json"), "utf8"));
     meta.branch = run.branch ?? run.meta?.branch;
+    meta.androidBranch = run.android?.branch;
+    meta.iosBranch = run.ios?.branch;
     meta.market = run.market ?? run.app;
     meta.android = (run.androidCommit ?? run.android?.commit ?? "").slice(0, 7) || undefined;
     meta.ios = (run.iosCommit ?? run.ios?.commit ?? "").slice(0, 7) || undefined;

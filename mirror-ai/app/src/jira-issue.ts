@@ -13,6 +13,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { branchLabel } from "./branch-label.ts";
 
 type Counts = { high: number; highConfirmed: number; medium: number; low: number; apiDrift: number; uiDivergent: number; hardcodedCopy: number };
 type Finding = { kind: string; id: string; area: string; severity: string; confidence: string; files?: string[] };
@@ -56,7 +57,7 @@ export function buildJiraIssue(summary: Summary, run: RunMeta, opts: { project?:
   const names = mods.filter((m) => !m.miscellaneous).map((m) => m.label);
   const whole = run.scope === "project";
   const date = (run.date ?? new Date().toISOString()).slice(0, 10);
-  const branch = run.branch || run.android?.branch || run.ios?.branch || "unknown";
+  const branch = branchLabel(run, { fallback: "unknown" });
   const what = whole ? `whole-project parity audit (${mods.length} modules)` : names.length <= 3 ? `${names.join(", ")} parity audit` : `${names.length}-module parity audit`;
   const summaryLine = cut(`[${market}] Mirror AI — ${what} @ ${branch} (${date})`, 250);
 
@@ -74,8 +75,8 @@ export function buildJiraIssue(summary: Summary, run: RunMeta, opts: { project?:
       [bold("Market / app: "), `${market}${run.app && run.app !== market ? ` (${run.app})` : ""}`],
       [bold("Scope: "), cut(scopeText, 400)],
       [bold("Branch: "), code(branch)],
-      [bold("Android: "), code(run.android?.branch || branch), " @ ", code(short(run.android?.commit))],
-      [bold("iOS: "), code(run.ios?.branch || branch), " @ ", code(short(run.ios?.commit))],
+      [bold("Android: "), code(run.android?.branch || run.branch || "unknown"), " @ ", code(short(run.android?.commit))],
+      [bold("iOS: "), code(run.ios?.branch || run.branch || "unknown"), " @ ", code(short(run.ios?.commit))],
       [bold("Ark session: "), run.sessionId ? code(run.sessionId) : "n/a", " · flow ", code("telco-apps-mirror-audit")],
       [bold("Date: "), date],
     ]),
