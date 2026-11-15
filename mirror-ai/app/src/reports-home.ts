@@ -4,8 +4,8 @@
  *   reports/README.md        home page: one row per app, its latest report
  *   reports/<app>/README.md  that app's reports grouped by sprint (branch),
  *                            newest sprint first, newest report first
- *   README.html beside each  the same page as standalone HTML with relative
- *                            links, to browse the indexes from a clone
+ *   README.html beside each  one self-contained offline page holding every
+ *                            index and every parity-report.html (see bundleHtml)
  *
  *   node --experimental-strip-types src/reports-home.ts <reports_dir> [--apps caribbean,panama,lcpr]
  *
@@ -13,6 +13,7 @@
  * `generatedBy` in it names who ran the audit. Folder names follow
  * <App>-<Module | Module+N | ALL>-<YYYY-MM-DD> (see reportFolderName).
  */
+import { gzipSync } from "node:zlib";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -159,22 +160,15 @@ function inline(md: string, href: (h: string) => string): string {
 
 const splitRow = (line: string) => line.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim());
 
-/**
- * The README.md beside it as a standalone page: the same headings, text and tables,
- * with folder links pointed at the README.html inside them (an app folder, the home
- * page) so the indexes can be browsed straight from a clone with no Markdown viewer.
- */
-export function indexHtml(md: string, href: (h: string) => string): string {
+/** The headings, text and tables of an index README.md as HTML, links mapped by `href`. */
+function mdBody(md: string, href: (h: string) => string): string {
   const lines = md.split("\n");
   const body: string[] = [];
-  let title = "Mirror AI reports";
   for (let k = 0; k < lines.length; k++) {
     const line = lines[k];
     const h = /^(#{1,3})\s+(.*)$/.exec(line);
-    if (h) {
-      if (h[1] === "#") title = h[2];
-      body.push(`<h${h[1].length}>${inline(h[2], href)}</h${h[1].length}>`);
-    } else if (line.trim().startsWith("|") && /^\s*\|[-|\s:]+\|\s*$/.test(lines[k + 1] ?? "")) {
+    if (h) body.push(`<h${h[1].length}>${inline(h[2], href)}</h${h[1].length}>`);
+    else if (line.trim().startsWith("|") && /^\s*\|[-|\s:]+\|\s*$/.test(lines[k + 1] ?? "")) {
       const head = splitRow(line);
       k++;
       const rows: string[][] = [];
@@ -186,16 +180,61 @@ export function indexHtml(md: string, href: (h: string) => string): string {
       );
     } else if (line.trim()) body.push(`<p>${inline(line, href)}</p>`);
   }
+  return body.join("\n");
+}
+
+export type Bundle = { home: string; apps: { id: string; html: string }[]; reports: { app: string; folder: string; title: string; gz: string }[] };
+
+/**
+ * Everything in one offline page: the home index, every app's index and every
+ * parity-report.html (gzip + base64, unpacked in the browser on click). The same
+ * page is written as reports/README.html and reports/<app>/README.html, opening on
+ * the home or that app's view, so downloading any ONE of them gives a manager every
+ * report of every app with nothing else to fetch.
+ */
+export function buildBundle(dir: string, apps: { id: string; reports: Report[] }[], mdUrl: (rel: string) => string): Bundle {
+  const has = new Set<string>();
+  const reports: Bundle["reports"] = [];
+  for (const a of apps)
+    for (const r of a.reports) {
+      const file = path.join(dir, a.id, r.folder, "parity-report.html");
+      if (!existsSync(file)) continue;
+      has.add(`${a.id}/${r.folder}`);
+      reports.push({ app: a.id, folder: r.folder, title: `${appName(a.id)} · ${r.folder}`, gz: gzipSync(readFileSync(file), { level: 9 }).toString("base64") });
+    }
+  const map = (from: string) => (h: string) => {
+    if (/^[a-z]+:/i.test(h) || h.startsWith("#")) return h;
+    const rel = path.posix.normalize(path.posix.join(from || ".", decodeURIComponent(h))).replace(/\/$/, "");
+    if (rel === "." || rel === "") return "#/";
+    if (rel.endsWith(".md")) return mdUrl(rel);
+    const [app, folder, file] = rel.split("/");
+    if (folder === undefined) return apps.some((a) => a.id === app) ? `#/app/${encodeURIComponent(app)}` : h;
+    if (has.has(`${app}/${folder}`) && (file === undefined || file === "parity-report.html")) return `#/report/${encodeURIComponent(app)}/${encodeURIComponent(folder)}`;
+    return mdUrl(rel);
+  };
+  return {
+    home: mdBody(homeIndex(apps), map("")),
+    apps: apps.map((a) => ({ id: a.id, html: mdBody(appIndex(a.id, a.reports), map(a.id)) })),
+    reports,
+  };
+}
+
+export function bundleHtml(b: Bundle, start: string): string {
+  const views = [`<section data-view="/">${b.home}</section>`, ...b.apps.map((a) => `<section data-view="/app/${esc(a.id)}" hidden>${a.html}</section>`)];
+  const data = b.reports
+    .map((r, i) => `<script type="application/gzip;base64" id="r${i}" data-key="${esc(`${r.app}/${r.folder}`)}" data-title="${esc(r.title)}" data-app="${esc(r.app)}">${r.gz}</script>`)
+    .join("\n");
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title.replace(/`/g, ""))}</title>
+<title>Mirror AI reports</title>
 <style>
-:root { --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --head:#f6f8fa; --link:#0969da; --code:#eff1f3; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --head:#151b23; --link:#4493f8; --code:#262c36; } }
+:root { --bg:#ffffff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --head:#f6f8fa; --link:#0969da; --code:#eff1f3; --bar:#f6f8fa; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#9198a1; --line:#3d444d; --head:#151b23; --link:#4493f8; --code:#262c36; --bar:#151b23; } }
 * { box-sizing: border-box; }
+html, body { height:100%; }
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
 main { max-width:1200px; margin:0 auto; padding:24px 16px 48px; }
 h1 { font-size:1.75em; margin:0 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); }
@@ -208,12 +247,77 @@ table { border-collapse:collapse; width:100%; }
 th, td { border:1px solid var(--line); padding:7px 12px; text-align:left; vertical-align:top; }
 th { background:var(--head); font-weight:600; white-space:nowrap; }
 tbody tr:nth-child(even) td { background:color-mix(in srgb, var(--head) 60%, transparent); }
+.note { font-size:13px; }
+#viewer { position:fixed; inset:0; display:flex; flex-direction:column; background:var(--bg); }
+#viewer[hidden] { display:none; }
+#bar { display:flex; gap:16px; align-items:center; flex-wrap:wrap; padding:8px 16px; border-bottom:1px solid var(--line); background:var(--bar); }
+#bar strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#bar button { font:inherit; color:var(--link); background:none; border:0; padding:0; cursor:pointer; }
+#frame { flex:1; width:100%; border:0; background:#fff; }
+#msg { padding:24px 16px; color:var(--muted); }
 </style>
 </head>
 <body>
 <main>
-${body.join("\n")}
+${views.join("\n")}
+<p class="note">Offline bundle: this one file holds every app's index and all ${b.reports.length} report(s). Save it and open it anywhere, no other files needed.</p>
 </main>
+<div id="viewer" hidden>
+  <div id="bar"><a id="back" href="#/">← Back</a><strong id="title"></strong><button id="tab" type="button">Open in new tab</button><button id="save" type="button">Download report</button></div>
+  <div id="msg" hidden></div>
+  <iframe id="frame" title="Report"></iframe>
+</div>
+${data}
+<script>
+(() => {
+  const START = ${JSON.stringify(start)};
+  const $ = (id) => document.getElementById(id);
+  const cache = new Map();
+  let current = null;
+  async function unpack(el) {
+    if (cache.has(el.id)) return cache.get(el.id);
+    const bin = Uint8Array.from(atob(el.textContent.trim()), (c) => c.charCodeAt(0));
+    const html = await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    cache.set(el.id, html);
+    return html;
+  }
+  function show(view) {
+    $("viewer").hidden = true;
+    document.title = "Mirror AI reports";
+    let found = false;
+    for (const s of document.querySelectorAll("section[data-view]")) { const on = s.dataset.view === view; s.hidden = !on; found ||= on; }
+    if (!found) document.querySelector('section[data-view="/"]').hidden = false;
+    window.scrollTo(0, 0);
+  }
+  async function open(key) {
+    const el = [...document.querySelectorAll("script[data-key]")].find((s) => s.dataset.key === key);
+    if (!el) return show("/");
+    $("viewer").hidden = false;
+    $("title").textContent = el.dataset.title;
+    $("back").href = "#/app/" + encodeURIComponent(el.dataset.app);
+    document.title = el.dataset.title;
+    $("msg").hidden = true;
+    $("frame").hidden = false;
+    try {
+      current = { html: await unpack(el), name: key.replace(/\\//g, "_") + ".html" };
+      $("frame").srcdoc = current.html;
+    } catch (e) {
+      $("frame").hidden = true;
+      $("msg").hidden = false;
+      $("msg").textContent = "This browser cannot unpack the report (" + e + "). Open the file in a current Chrome, Edge, Safari or Firefox.";
+    }
+  }
+  function route() {
+    const h = decodeURIComponent((location.hash || "#" + START).slice(1)) || "/";
+    if (h.startsWith("/report/")) open(h.slice(8)); else show(h);
+  }
+  const blobUrl = () => URL.createObjectURL(new Blob([current.html], { type: "text/html" }));
+  $("tab").onclick = () => current && window.open(blobUrl(), "_blank");
+  $("save").onclick = () => { if (!current) return; const a = document.createElement("a"); a.href = blobUrl(); a.download = current.name; a.click(); };
+  window.addEventListener("hashchange", route);
+  route();
+})();
+</script>
 </body>
 </html>
 `;
@@ -230,30 +334,27 @@ export function main(argv: string[]): number {
   const k = argv.indexOf("--apps");
   const ids = k >= 0 ? argv[k + 1].split(",") : readdirSync(dir).filter((f) => statSync(path.join(dir, f)).isDirectory());
   const apps = ids.map((id) => ({ id, reports: readReports(path.join(dir, id)) }));
+  const base = b >= 0 ? argv[b + 1].replace(/\/$/, "") : "";
+  const branch = at >= 0 ? argv[at + 1] : "";
 
-  // README.html: always relative links, so it opens from a clone (file://) on any branch.
-  // A folder link goes to that folder's README.html when it has one (home, app folders).
+  // README.html: the self-contained offline bundle, one copy per folder, each opening on its own view.
+  // Built from the relative-link indexes; Markdown reports are not embedded, so their links go to
+  // Bitbucket when --base is given.
   BASE = "";
   AT = "";
-  const local = (from: string) => (h: string) => {
-    if (/^[a-z]+:/i.test(h) || !h.endsWith("/")) return h;
-    const target = path.join(dir, from, decodeURIComponent(h));
-    return existsSync(path.join(target, "README.md")) || apps.some((a) => path.resolve(dir, a.id) === path.resolve(target)) || path.resolve(target) === path.resolve(dir)
-      ? `${h}README.html`
-      : h;
-  };
+  const bundle = buildBundle(dir, apps, (rel) => (base ? `${base}/${enc(rel)}${branch ? `?at=${encodeURIComponent(branch)}` : ""}` : enc(rel)));
+  writeFileSync(path.join(dir, "README.html"), bundleHtml(bundle, "/"));
   for (const a of apps) {
     mkdirSync(path.join(dir, a.id), { recursive: true });
-    writeFileSync(path.join(dir, a.id, "README.html"), indexHtml(appIndex(a.id, a.reports), local(a.id)));
+    writeFileSync(path.join(dir, a.id, "README.html"), bundleHtml(bundle, `/app/${a.id}`));
   }
-  writeFileSync(path.join(dir, "README.html"), indexHtml(homeIndex(apps), local("")));
 
   // README.md: what Bitbucket renders under a folder's file listing (README.* is the home page).
-  if (b >= 0) BASE = argv[b + 1].replace(/\/$/, "");
-  if (at >= 0) AT = argv[at + 1];
+  BASE = base;
+  AT = branch;
   for (const a of apps) writeFileSync(path.join(dir, a.id, "README.md"), appIndex(a.id, a.reports));
   writeFileSync(path.join(dir, "README.md"), homeIndex(apps));
-  console.error(`README.md + README.html, and ${apps.length} app index(es) of each, written in ${dir}`);
+  console.error(`README.md + README.html (offline bundle, ${bundle.reports.length} report(s)) written in ${dir} and ${apps.length} app folder(s)`);
   return 0;
 }
 
