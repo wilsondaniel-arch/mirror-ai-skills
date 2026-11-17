@@ -110,6 +110,12 @@ export interface RunJson extends RunMeta {
   reportMdUrl: string;
 }
 
+/** https://<host>/<owner>/<repo> from a git remote (ssh or https, credentials dropped), or undefined. */
+export function repoWebUrl(remote: string): string | undefined {
+  const m = remote.trim().match(/^(?:ssh:\/\/)?(?:git@|https?:\/\/(?:[^@/]+@)?)([^:/]+)[:/]+(.+?)(?:\.git)?\/?$/);
+  return m ? `https://${m[1]}/${m[2]}` : undefined;
+}
+
 export function buildRunMeta(input: {
   androidPath: string;
   iosPath: string;
@@ -137,8 +143,8 @@ export function buildRunMeta(input: {
     scope,
     modules,
     branch: auditedBranch(input.androidPath, env.MIRROR_AI_ANDROID_BRANCH || env.MIRROR_AI_BRANCH),
-    android: { branch: auditedBranch(input.androidPath, env.MIRROR_AI_ANDROID_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.androidPath, ["rev-parse", "HEAD"]) },
-    ios: { branch: auditedBranch(input.iosPath, env.MIRROR_AI_IOS_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.iosPath, ["rev-parse", "HEAD"]) },
+    android: { branch: auditedBranch(input.androidPath, env.MIRROR_AI_ANDROID_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.androidPath, ["rev-parse", "HEAD"]), ...repoField(input.androidPath) },
+    ios: { branch: auditedBranch(input.iosPath, env.MIRROR_AI_IOS_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.iosPath, ["rev-parse", "HEAD"]), ...repoField(input.iosPath) },
     ...(session ? { sessionId: session } : {}),
     ...(security ? { security: true } : {}),
     generatedBy: who,
@@ -148,6 +154,12 @@ export function buildRunMeta(input: {
     reportUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.html?at=${encodeURIComponent(branchRef)}`,
     reportMdUrl: `${web}/src/main/reports/${app}/${folder}/parity-report.md?at=${encodeURIComponent(branchRef)}`,
   };
+}
+
+/** { repoUrl } from the checkout's origin remote, or nothing when it has none. */
+function repoField(root: string): { repoUrl?: string } {
+  const url = repoWebUrl(git(root, ["remote", "get-url", "origin"]));
+  return url ? { repoUrl: url } : {};
 }
 
 function flag(argv: string[], name: string): string | undefined {

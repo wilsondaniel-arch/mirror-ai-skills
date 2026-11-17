@@ -73,3 +73,66 @@ test("a BL row with Android and iOS in one cell keeps severity and confidence", 
   assert.match(html, /<strong>Impact:<\/strong> Offers differ\./);
   assert.match(out, /\*\*High\*\* · Potential/);
 });
+
+test("modules render as one dropdown (trigger + flyout), not a scrolling row", () => {
+  const md = ["# Business logic audit — Alpha", "", "### 1. Business Logic Difference Matrix", "", "| ID | Area | Android | iOS | Impact | Severity | Confidence |", "|---|---|---|---|---|---|---|", "| BL-01 | A | a | b | c | High | Confirmed |", "", "# Business logic audit — Beta", "", "### 1. Business Logic Difference Matrix", "", "None."].join("\n");
+  const { html } = renderReportUi(md);
+  assert.match(html, /<button type="button" class="mod-dd-btn" id="mod-dd-btn" aria-haspopup="true" aria-expanded="false"/);
+  assert.match(html, /<div class="mod-dd-panel" id="mod-dd-panel" hidden>/);
+  assert.match(html, /Modules · 2/);
+  // Every module is an item in the flyout, and picking one routes and closes it.
+  assert.equal((html.match(/class="mod-tile"/g) ?? []).length, 2);
+  assert.match(html, /onclick="pickModule\('alpha'\)"/);
+  assert.match(html, /function closeModMenu/);
+  assert.match(html, /e\.key === 'Escape'/);
+});
+
+test("header: brand left, linked Android/iOS branches, date and ticket right", async () => {
+  const { headerMetaHtml } = await import("../src/report-ui.ts");
+  const html = headerMetaHtml({
+    app: "caribbean",
+    androidBranch: "caribbean/release/sprint-20",
+    iosBranch: "caribbean/release/sprint-20",
+    android: "eab41f7",
+    androidCommit: "eab41f748523f14b87e9fa6699cd478fc304670c",
+    ios: "0305924",
+    date: "2026-11-17",
+    jiraKey: "TER-2201",
+    jiraUrl: "https://mypaytm.atlassian.net/browse/TER-2201",
+  });
+  assert.match(html, /href="https:\/\/bitbucket\.org\/paytmteam\/lla-superapp-android\/branch\/caribbean\/release\/sprint-20"/);
+  // No commit in the header: branch names only.
+  assert.doesNotMatch(html, /eab41f7|0305924|\/commits\/|hm-at/);
+  assert.match(html, /href="https:\/\/bitbucket\.org\/paytmteam\/lla-superapp-ios\/branch\/caribbean\/release\/sprint-20"/);
+  assert.match(html, />17 Nov 2026</);
+  assert.match(html, /<a class="hm-ticket" href="https:\/\/mypaytm\.atlassian\.net\/browse\/TER-2201"[^>]*>TER-2201<\/a>/);
+  assert.match(html, /target="_blank" rel="noopener noreferrer"/);
+  // An explicit repo URL wins; an unknown app with no repo shows plain text, never a guessed link.
+  const plain = headerMetaHtml({ app: "unknown", androidBranch: "x/y", jiraKey: "ABC-1", jiraUrl: "javascript:alert(1)" });
+  assert.doesNotMatch(plain, /href=/);
+  assert.match(plain, /<span class="hm-branch"[^>]*>x\/y<\/span>/);
+});
+
+test("run.json repo URLs come from the git remote, credentials dropped", async () => {
+  const { repoWebUrl } = await import("../src/run-meta.ts");
+  assert.equal(repoWebUrl("git@bitbucket.org:paytmteam/lla_panama_android.git"), "https://bitbucket.org/paytmteam/lla_panama_android");
+  assert.equal(repoWebUrl("https://user:tok@bitbucket.org/paytmteam/lla-superapp-ios.git"), "https://bitbucket.org/paytmteam/lla-superapp-ios");
+  assert.equal(repoWebUrl("ssh://git@bitbucket.org/paytmteam/networkqoe_ios"), "https://bitbucket.org/paytmteam/networkqoe_ios");
+  assert.equal(repoWebUrl(""), undefined);
+});
+
+test("the ticket is read from jira-summary.md when run.json has none (publish re-render)", async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const pathMod = await import("node:path");
+  const { main } = await import("../src/report-ui.ts");
+  const dir = mkdtempSync(pathMod.join(tmpdir(), "hdr-"));
+  writeFileSync(pathMod.join(dir, "parity-report.md"), "# Business logic audit — Alpha\n\n### 1. Business Logic Difference Matrix\n\nNone.\n");
+  writeFileSync(pathMod.join(dir, "run.json"), JSON.stringify({ app: "panama", date: "2026-11-16T11:23:52.961Z", android: { branch: "bug/TER-2187-ai-api-scanning", commit: "ced95f9efb81" }, ios: { branch: "bug/TER-2187-ai-api-scanning", commit: "315b07090ef5" } }));
+  writeFileSync(pathMod.join(dir, "jira-summary.md"), "# TER-2198\nhttps://mypaytm.atlassian.net/browse/TER-2198\n");
+  await main([dir, "--out", pathMod.join(dir, "r.html"), "--md", pathMod.join(dir, "r.md")]);
+  const html = readFileSync(pathMod.join(dir, "r.html"), "utf8");
+  assert.match(html, /href="https:\/\/mypaytm\.atlassian\.net\/browse\/TER-2198"/);
+  assert.match(html, /lla_panama_android\/branch\/bug\/TER-2187-ai-api-scanning/);
+  assert.match(html, />16 Nov 2026</);
+});

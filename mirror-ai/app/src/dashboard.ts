@@ -31,8 +31,8 @@ export interface RunMeta {
   scope: "project" | "modules";
   modules?: string[];
   branch?: string;
-  android?: { branch?: string; commit?: string };
-  ios?: { branch?: string; commit?: string };
+  android?: { branch?: string; commit?: string; repoUrl?: string };
+  ios?: { branch?: string; commit?: string; repoUrl?: string };
   sessionId?: string;
   jiraKey?: string;
   jiraUrl?: string;

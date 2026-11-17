@@ -21,7 +21,70 @@ type Table = { head: string[]; rows: string[][] };
 type Block = { kind: "table"; table: Table } | { kind: "text"; text: string } | { kind: "heading"; level: number; text: string };
 type Section = { title: string; blocks: Block[] };
 export type Module = { name: string; key: string; intro: Block[]; sections: Section[] };
-export type RunMeta = { branch?: string; androidBranch?: string; iosBranch?: string; android?: string; ios?: string; market?: string; date?: string };
+export type RunMeta = {
+  branch?: string;
+  androidBranch?: string;
+  iosBranch?: string;
+  /** Short commits. */
+  android?: string;
+  ios?: string;
+  /** Full commits, for links. */
+  androidCommit?: string;
+  iosCommit?: string;
+  /** Repository web URLs (https://bitbucket.org/<workspace>/<repo>), for branch and commit links. */
+  androidRepo?: string;
+  iosRepo?: string;
+  app?: string;
+  market?: string;
+  /** YYYY-MM-DD. */
+  date?: string;
+  jiraKey?: string;
+  jiraUrl?: string;
+};
+
+/**
+ * Repositories of the apps Mirror AI audits, for reports whose run.json predates
+ * android.repoUrl / ios.repoUrl (run-meta.ts now records them from the git remote).
+ */
+const KNOWN_REPOS: Record<string, { android: string; ios: string }> = {
+  caribbean: { android: "https://bitbucket.org/paytmteam/lla-superapp-android", ios: "https://bitbucket.org/paytmteam/lla-superapp-ios" },
+  panama: { android: "https://bitbucket.org/paytmteam/lla_panama_android", ios: "https://bitbucket.org/paytmteam/lla_panama_ios" },
+  lcpr: { android: "https://bitbucket.org/paytmteam/lla_myliberty_android", ios: "https://bitbucket.org/paytmteam/lla_myliberty_ios" },
+  "ooredoo-maldives": { android: "https://bitbucket.org/paytmteam/gitOoredooAndroid", ios: "https://bitbucket.org/paytmteam/gitOoredoo-iOS" },
+  networkqoe: { android: "https://bitbucket.org/paytmteam/networkqoe_android", ios: "https://bitbucket.org/paytmteam/networkqoe_ios" },
+};
+
+/** A branch page link; each path segment is encoded so `feature/x` stays a path. */
+const branchUrl = (repo: string, branch: string) => `${repo.replace(/\/+$/, "")}/branch/${branch.split("/").map(encodeURIComponent).join("/")}`;
+const safeHref = (url?: string) => (url && /^https:\/\//.test(url) ? url : undefined);
+
+/** "17 Nov 2026" from YYYY-MM-DD. */
+function displayDate(date?: string): string {
+  if (!date || !/^\d{4}-\d{2}-\d{2}/.test(date)) return date ?? "";
+  return new Date(`${date.slice(0, 10)}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** Right side of the header: Android and iOS branch (and commit), audit date, ticket — linked where a URL is known. */
+export function headerMetaHtml(meta: RunMeta): string {
+  const known = KNOWN_REPOS[meta.app ?? ""] ?? KNOWN_REPOS[(meta.market ?? "").replace(/^superapp-/, "")];
+  const link = (text: string, href: string | undefined, cls: string, title: string) =>
+    href
+      ? `<a class="${cls}" href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(title)}">${esc(text)}</a>`
+      : `<span class="${cls}" title="${esc(title)}">${esc(text)}</span>`;
+  // Branch only (linked); the commit stays in run.json and the report body.
+  const platform = (label: string, branch?: string, repo?: string) => {
+    if (!branch) return "";
+    const r = safeHref(repo);
+    return `<span class="hm-item"><span class="hm-label">${label}</span>${link(branch, r ? branchUrl(r, branch) : undefined, "hm-branch", `${label} branch ${branch}`)}</span>`;
+  };
+  const parts = [
+    platform("Android", meta.androidBranch ?? meta.branch, meta.androidRepo ?? known?.android),
+    platform("iOS", meta.iosBranch ?? meta.branch, meta.iosRepo ?? known?.ios),
+    meta.date ? `<span class="hm-item"><time class="hm-date" datetime="${esc(meta.date)}">${esc(displayDate(meta.date))}</time></span>` : "",
+    meta.jiraKey ? `<span class="hm-item">${link(meta.jiraKey, safeHref(meta.jiraUrl), "hm-ticket", `Jira ${meta.jiraKey}`)}</span>` : "",
+  ].filter(Boolean);
+  return parts.join('<span class="hm-sep" aria-hidden="true"></span>');
+}
 const metaBranch = (m: RunMeta) => ({ branch: m.branch, android: { branch: m.androidBranch }, ios: { branch: m.iosBranch } });
 
 const BARE_PATH_RE =
@@ -761,7 +824,7 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
     }
     const sum = [`${blRows.length} BL diff${blRows.length === 1 ? "" : "s"}`, v.ui ? `${v.ui.pairs.length} UI pair${v.ui.pairs.length === 1 ? "" : "s"}` : "", v.hc ? `${v.hc.rows.length} strings` : "", v.api ? `${drift} API drift` : "", v.sec ? `${secTotal} security` : ""].filter(Boolean).join(" · ");
     tiles.push(
-      `<button class="mod-tile" data-module="${k}" title="${esc(sum)}" aria-label="${esc(`${v.mod.name}: ${sum}`)}" onclick="location.hash='${k}'"><span class="mod-name">${esc(v.mod.name)}</span><span class="mod-status">${v.bl || !v.sec ? blRows.length : secTotal}</span></button>`,
+      `<button class="mod-tile" data-module="${k}" title="${esc(sum)}" aria-label="${esc(`${v.mod.name}: ${sum}`)}" onclick="pickModule('${k}')"><span class="mod-name">${esc(v.mod.name)}</span><span class="mod-status">${v.bl || !v.sec ? blRows.length : secTotal}</span></button>`,
     );
     navs.push(
       `<div class="nav-tabs-inner" data-module="${k}" hidden>${tabs
@@ -797,6 +860,49 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
   @media (max-width: 800px) { .split-view { grid-template-columns: minmax(0,1fr); } }
   .hc-filter-row input[type=search] { flex: 1 1 240px; max-width: 340px; border: 1px solid var(--border); border-radius: 100px; font: 400 15px var(--sans); padding: 9px 18px; color: var(--text-primary); background: #F6FAFD; }
   .hc-filter-row input[type=search]::placeholder { color: var(--text-tertiary); }
+  /* Header: brand far left, audit details far right */
+  .site-header { padding: 0 24px; }
+  .header-inner { max-width: none; gap: 24px; }
+  .header-brand { flex: 0 1 auto; min-width: 0; }
+  .header-meta { flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px 0; font-family: var(--sans); font-size: 12px; color: rgba(246,250,253,0.72); letter-spacing: 0; }
+  .hm-item { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+  .hm-label { color: rgba(246,250,253,0.55); font-weight: 500; }
+  .hm-branch, .hm-ticket { color: #F6FAFD; font-weight: 600; text-decoration: none; }
+  .hm-date { color: rgba(246,250,253,0.85); }
+  .hm-ticket { padding: 1px 9px; border-radius: 980px; background: rgba(246,250,253,0.14); }
+  a.hm-branch:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a.hm-ticket:hover { background: rgba(246,250,253,0.26); }
+  .header-meta a:focus-visible { outline: 2px solid #B3CFE5; outline-offset: 2px; border-radius: 4px; }
+  .hm-sep { width: 1px; height: 12px; margin: 0 12px; background: rgba(246,250,253,0.25); align-self: center; }
+  @media (max-width: 800px) { .site-header { padding: 0 16px 12px; } .header-inner { height: auto; min-height: 48px; padding-top: 12px; gap: 8px; } .header-meta { justify-content: flex-start; gap: 6px 16px; } .hm-sep { display: none; } }
+  @media print { .header-meta a { color: inherit; } }
+
+  /* Module dropdown — apple.com nav flyout style */
+  .modules { display: flex; justify-content: center; position: relative; z-index: 95; } /* above the sticky tabs (90), below the header (100) */
+  .mod-dd { position: relative; display: flex; justify-content: center; width: 100%; max-width: 1080px; }
+  .mod-dd-btn { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 18px 0 20px; border: 0; border-radius: 980px; cursor: pointer; font: inherit; color: #1d1d1f; background: rgba(255,255,255,0.86); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08), 0 2px 12px rgba(10,25,49,0.06); transition: box-shadow .24s cubic-bezier(.4,0,.6,1), background .24s; }
+  .mod-dd-btn:hover { background: #fff; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 4px 18px rgba(10,25,49,0.10); }
+  .mod-dd-btn:focus-visible { outline: 2px solid #0071e3; outline-offset: 3px; }
+  .mod-dd-kicker { font-size: 12px; font-weight: 500; color: #6e6e73; letter-spacing: -0.01em; }
+  .mod-dd-name { font-size: 17px; font-weight: 600; letter-spacing: -0.022em; }
+  .mod-dd-count { font-size: 12px; font-weight: 600; min-width: 22px; text-align: center; padding: 1px 8px; border-radius: 980px; background: #0A1931; color: #F6FAFD; }
+  .mod-dd-chev { color: #6e6e73; transition: transform .24s cubic-bezier(.4,0,.6,1); }
+  .mod-dd-btn[aria-expanded="true"] .mod-dd-chev { transform: rotate(180deg); }
+  .mod-dd-panel { position: absolute; top: calc(100% + 10px); left: 50%; width: min(720px, calc(100vw - 32px)); transform: translate(-50%, -8px); opacity: 0; padding: 26px 34px 30px; border-radius: 18px; background: rgba(250,250,252,0.96); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 24px 60px rgba(10,25,49,0.18); transition: opacity .24s cubic-bezier(.4,0,.6,1), transform .24s cubic-bezier(.4,0,.6,1); }
+  .mod-dd.open .mod-dd-panel { opacity: 1; transform: translate(-50%, 0); }
+  .mod-dd-eyebrow { font-size: 12px; font-weight: 400; color: #6e6e73; margin-bottom: 14px; letter-spacing: -0.01em; }
+  .mod-dd .modules-inner { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 28px; background: none; box-shadow: none; padding: 0; border-radius: 0; overflow: visible; max-width: none; }
+  .mod-dd .mod-tile { display: flex; flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; height: auto; padding: 7px 0; border-radius: 0; background: none !important; box-shadow: none !important; color: #1d1d1f; text-align: left; opacity: 0; transform: translateY(-4px); transition: opacity .3s ease, transform .3s ease, color .2s; }
+  .mod-dd.open .mod-tile { opacity: 1; transform: none; }
+  .mod-dd .mod-tile .mod-name { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.17; color: inherit; }
+  .mod-dd .mod-tile .mod-status { background: none !important; color: #6e6e73 !important; font-size: 14px; font-weight: 500; padding: 0; min-width: 0; margin: 0; }
+  .mod-dd .mod-tile:hover, .mod-dd .mod-tile:focus-visible { color: #0066cc; outline: none; }
+  .mod-dd .mod-tile.active { color: #0A1931; }
+  .mod-dd .mod-tile.active .mod-name::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 10px; border-radius: 50%; background: #0071e3; vertical-align: middle; }
+  .mod-dd-scrim { position: fixed; inset: 0; z-index: -1; background: rgba(10,25,49,0.18); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+  /* Phones: a full-width sheet under the header, as apple.com does, pinned to the viewport so page overflow cannot push it off-screen */
+  @media (max-width: 800px) { .mod-dd-panel { position: fixed; top: calc(56px + env(safe-area-inset-top, 0px)); left: 0; right: 0; width: auto; max-height: calc(100dvh - 56px); overflow-y: auto; transform: translateY(-8px); border-radius: 0 0 18px 18px; padding: 22px 24px 28px; } .mod-dd.open .mod-dd-panel { transform: none; } .mod-dd .modules-inner { grid-template-columns: 1fr; } .mod-dd .mod-tile { padding: 9px 0; } .mod-dd .mod-tile .mod-name { font-size: 24px; } .mod-dd-kicker { display: none; } }
+  @media (prefers-reduced-motion: reduce) { .mod-dd-panel, .mod-dd .mod-tile, .mod-dd-chev { transition: none; } }
   @media print { .site-header,.nav-tabs { position: static; } .section { display: block !important; page-break-before: always; } .diff-body { display: block !important; } .modules,.hc-filter-row,.sev-bar { display: none; } }
 `;
   const metaLine = [meta.market, branchLabel(metaBranch(meta)), meta.android ? `android @ ${meta.android}` : "", meta.ios ? `ios @ ${meta.ios}` : "", meta.date].filter(Boolean).join(" · ");
@@ -848,14 +954,47 @@ function route() {
   document.querySelectorAll('.section').forEach(x => x.classList.toggle('active', x.id === target));
   document.getElementById('hero-title').textContent = cfg.title;
   document.getElementById('hb-text').textContent = cfg.brand;
-  document.getElementById('hm-s').textContent = cfg.s;
+  const hm = document.getElementById('hm-s'); if (hm) hm.textContent = cfg.s;
   if (!tab) document.getElementById('empty-title').textContent = cfg.name + ': no audit yet';
   document.title = cfg.title.replace(/\\.$/, '') + ' · Android vs iOS';
 }
 buildSeverityFilters();
 Object.keys(HC).forEach(renderHC);
-window.addEventListener('hashchange', route);
+function modMenuOpen() { return document.getElementById('mod-dd').classList.contains('open'); }
+function openModMenu() {
+  const dd = document.getElementById('mod-dd'), panel = document.getElementById('mod-dd-panel');
+  panel.hidden = false; document.getElementById('mod-dd-scrim').hidden = false;
+  document.getElementById('mod-dd-btn').setAttribute('aria-expanded', 'true');
+  dd.querySelectorAll('.mod-tile').forEach((t, i) => { t.style.transitionDelay = (60 + i * 25) + 'ms'; });
+  void panel.offsetWidth; // apply the closed state first so the open state animates
+  dd.classList.add('open'); (dd.querySelector('.mod-tile.active') || dd.querySelector('.mod-tile')).focus({ preventScroll: true });
+}
+function closeModMenu(focusButton) {
+  const dd = document.getElementById('mod-dd'); if (!dd.classList.contains('open')) return;
+  dd.classList.remove('open'); dd.querySelectorAll('.mod-tile').forEach(t => { t.style.transitionDelay = '0ms'; });
+  document.getElementById('mod-dd-btn').setAttribute('aria-expanded', 'false');
+  document.getElementById('mod-dd-scrim').hidden = true;
+  setTimeout(() => { if (!dd.classList.contains('open')) document.getElementById('mod-dd-panel').hidden = true; }, 240);
+  if (focusButton) document.getElementById('mod-dd-btn').focus();
+}
+function toggleModMenu() { modMenuOpen() ? closeModMenu() : openModMenu(); }
+function pickModule(k) { location.hash = k; closeModMenu(true); }
+function syncModTrigger() {
+  const t = document.querySelector('.mod-tile.active'); if (!t) return;
+  document.getElementById('mod-dd-name').textContent = t.querySelector('.mod-name').textContent;
+  document.getElementById('mod-dd-count').textContent = t.querySelector('.mod-status').textContent;
+}
+document.addEventListener('keydown', e => {
+  if (!modMenuOpen()) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeModMenu(true); return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const items = [...document.querySelectorAll('.mod-dd .mod-tile')]; const i = items.indexOf(document.activeElement);
+    e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+  }
+});
+window.addEventListener('hashchange', () => { route(); syncModTrigger(); });
 route();
+syncModTrigger();
 `;
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -877,13 +1016,16 @@ ${extraCss}
 <header class="site-header">
   <div class="header-inner">
     <p class="header-brand"><span class="brand-dot" aria-hidden="true"></span><span id="hb-text">${esc(title)}</span></p>
-    <div class="header-meta"><span id="hm-s">${esc(sprint)}</span></div>
+    <div class="header-meta" aria-label="Audit details">${headerMetaHtml(meta) || `<span id="hm-s">${esc(sprint)}</span>`}</div>
   </div>
 </header>
 <section class="hero">
   <h1 id="hero-title">${esc(title)}.</h1>
 </section>
-<section class="modules" aria-label="Audit modules"><div class="modules-inner">${tiles.join("")}</div></section>
+<section class="modules" aria-label="Audit modules"><div class="mod-dd" id="mod-dd">
+<button type="button" class="mod-dd-btn" id="mod-dd-btn" aria-haspopup="true" aria-expanded="false" aria-controls="mod-dd-panel" onclick="toggleModMenu()"><span class="mod-dd-kicker">Module</span><span class="mod-dd-name" id="mod-dd-name"></span><span class="mod-dd-count" id="mod-dd-count"></span><svg class="mod-dd-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+<div class="mod-dd-panel" id="mod-dd-panel" hidden><div class="mod-dd-eyebrow">Modules · ${tiles.length}</div><div class="modules-inner" role="list">${tiles.join("")}</div></div>
+</div><div class="mod-dd-scrim" id="mod-dd-scrim" onclick="closeModMenu()" hidden></div></section>
 <nav class="nav-tabs" aria-label="Audit sections">
 ${navs.join("\n")}
 </nav>
@@ -985,8 +1127,25 @@ function readMeta(dir: string): RunMeta {
     meta.market = run.market ?? run.app;
     meta.android = (run.androidCommit ?? run.android?.commit ?? "").slice(0, 7) || undefined;
     meta.ios = (run.iosCommit ?? run.ios?.commit ?? "").slice(0, 7) || undefined;
+    meta.androidCommit = run.androidCommit ?? run.android?.commit;
+    meta.iosCommit = run.iosCommit ?? run.ios?.commit;
+    meta.androidRepo = run.android?.repoUrl;
+    meta.iosRepo = run.ios?.repoUrl;
+    meta.app = run.app;
     meta.date = (run.date ?? run.finishedAt ?? run.startedAt ?? "").slice(0, 10) || undefined;
+    meta.jiraKey = run.jiraKey;
+    meta.jiraUrl = run.jiraUrl;
   } catch {}
+  // The Jira stage writes jira-summary.md (`# KEY`, then the link) after run.json; publish re-renders with it.
+  if (!meta.jiraKey) {
+    try {
+      const text = readFileSync(path.join(dir, "jira-summary.md"), "utf8");
+      const url = text.match(/https:\/\/\S+\/browse\/([A-Z][A-Z0-9]+-\d+)/);
+      const key = url?.[1] ?? text.match(/\b[A-Z][A-Z0-9]+-\d+\b/)?.[0];
+      if (key) meta.jiraKey = key;
+      if (url) meta.jiraUrl = url[0];
+    } catch {}
+  }
   return meta;
 }
 
