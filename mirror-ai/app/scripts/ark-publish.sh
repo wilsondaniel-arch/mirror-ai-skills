@@ -204,3 +204,7 @@ const [out, branch, folder, reportUrl, commit, prUrl, prId, action, app] = proce
 fs.writeFileSync(out, JSON.stringify({ app, branch, folder, reportUrl, commit, prUrl: prUrl || null, prId: prId ? Number(prId) : null, prAction: action }, null, 2) + "\n");
 ' "$ART/publish.json" "$BRANCH" "$DEST" "$REPORT_URL" "$COMMIT" "$PR_URL" "$PR_ID" "$PR_ACTION" "$APP_ID"
 echo "ark-publish: ${PR_URL:-no PR} ($PR_ACTION) · report $REPORT_URL" >&2
+
+# Attach the final report (HTML with the ticket in its header, PDF, Markdown) to the
+# Jira ticket. Needs ATLASSIAN_USER_EMAIL + ATLASSIAN_API_TOKEN; never fails the publish.
+"$APP/scripts/ark-attach-jira.sh" "$ART" || true
