@@ -24,6 +24,7 @@ import path from "node:path";
 import { codegraphEnabled, rankFilesForKeywords } from "./codegraph.ts";
 import { findHardcodedCopy, hardcodedCopySection } from "./hardcoded-copy.ts";
 import { miscFileScore } from "./misc-scope.ts";
+import { isSecurityDef, readConfigSource, SECURITY_SKILL, securityBriefLines } from "./security-scope.ts";
 import { checkoutInfo } from "./report-store.ts";
 import { readSources, type RepoSource } from "./scan.ts";
 import type { AuditPass, AuditRequest } from "./audit.ts";
@@ -373,8 +374,8 @@ export function focusBody(body: string, needles: string[]): { body: string; exce
   return focused.length < body.length ? { body: focused, excerpted: true } : { body, excerpted: false };
 }
 
-export function rankSide(platform: Side["platform"], root: string, keywords: string[], only?: string[]): Side {
-  if (only) return listedSide(platform, root, only);
+export function rankSide(platform: Side["platform"], root: string, keywords: string[], only?: string[], keepOrder = false): Side {
+  if (only) return listedSide(platform, root, only, keepOrder);
   const needles = keywords.map((keyword) => keyword.toLowerCase()).filter(Boolean);
   const sources = readSources(root).filter((source) => !isTestFile(source.relativePath));
   const scored = new Map<string, { source: RepoSource; score: number; named: boolean }>();
@@ -429,7 +430,22 @@ export function rankSide(platform: Side["platform"], root: string, keywords: str
  * focus on, so whole compacted files are kept; what the budget cannot fit is
  * listed as unread in the coverage note.
  */
-function listedSide(platform: Side["platform"], root: string, files: string[]): Side {
+function listedSide(platform: Side["platform"], root: string, files: string[], keepOrder = false): Side {
+  if (keepOrder) {
+    // The App-wide Security section: config files first, then security code by
+    // strength, exactly as listed. Manifests and plists are not code sources,
+    // so they are read straight from disk.
+    const byPath = new Map(readSources(root).map((source) => [source.relativePath, source]));
+    const sources = files
+      .map((file) => byPath.get(file) ?? readConfigSource(root, file))
+      .filter((source): source is RepoSource => source !== null);
+    return {
+      platform,
+      root,
+      matched: sources.length,
+      files: sources.map((source) => ({ source, ...compactSource(source.text), excerpted: false })),
+    };
+  }
   const wanted = new Set(files);
   const ordered = readSources(root)
     .filter((source) => wanted.has(source.relativePath))
@@ -552,6 +568,17 @@ Rules:
 
 The audit specs follow; use them to decide what counts as a finding.`;
 
+/**
+ * Added to the scan rules only when the opt-in security skill runs, so audits
+ * without it keep byte-identical prompts (and their saved scans).
+ */
+const SECURITY_SCAN_NOTE = `
+
+Security (the security-skill spec is included): also list security candidates
+with section "security" — weak or missing controls on either platform, and
+controls present on one platform but not the other. Never copy a secret into
+"detail": name its kind and cite the line.`;
+
 const VERIFY_RULES = `You are stage 2 of a two-stage Android vs iOS audit: the verifier and author.
 A cheaper scanner read a ranked slice of this module's code and proposed the
 candidate findings in the user message. Next to them are the real source lines
@@ -602,7 +629,7 @@ const SCAN_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          section: { type: "string", enum: ["logic", "ui", "api"] },
+          section: { type: "string", enum: ["logic", "ui", "api", "security"] },
           title: { type: "string" },
           severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
           android: { type: "array", items: { type: "string" } },
@@ -619,7 +646,7 @@ const SCAN_SCHEMA = {
 } as const;
 
 interface Candidate {
-  section: "logic" | "ui" | "api";
+  section: "logic" | "ui" | "api" | "security";
   title: string;
   severity: "critical" | "high" | "medium" | "low";
   android: string[];
@@ -671,6 +698,7 @@ function appendCopyTable(sections: Record<string, string>, specs: PassSpec[], it
 }
 
 function moduleBrief(request: AuditRequest, def: ModuleDef, row: ModuleRow | null): string {
+  if (isSecurityDef(def)) return securityBrief(request, def);
   if (def.files) return miscBrief(request, def);
   const lines = [`Module: **${def.label}** (enum constant \`${def.id.toUpperCase()}\`).`];
   for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]] as const) {
@@ -688,6 +716,16 @@ function moduleBrief(request: AuditRequest, def: ModuleDef, row: ModuleRow | nul
       : "- iOS does not declare this module in its module enum.",
   );
   lines.push(`- Search terms used to select files: ${def.keywords.join(", ")}.`);
+  return lines.join("\n");
+}
+
+/** Brief for the App-wide Security section: the security layers of the whole app. */
+function securityBrief(request: AuditRequest, def: ModuleDef): string {
+  const lines = securityBriefLines(def);
+  for (const [platform, root] of [["Android", request.androidPath], ["iOS", request.iosPath]] as const) {
+    const { branch, commit } = checkoutInfo(root);
+    if (commit) lines.splice(1, 0, `- ${platform} checkout: branch \`${branch || "detached"}\` @ \`${commit}\`.`);
+  }
   return lines.join("\n");
 }
 
@@ -1125,7 +1163,8 @@ async function auditOnce(
   }
   const client = new Anthropic();
   const outcomes = new Map<string, ModuleOutcome>();
-  const scanSystem = `${SCAN_RULES}\n\n${specsBlock(specs)}`;
+  const securityNote = specs.some(({ pass }) => pass.id === SECURITY_SKILL) ? SECURITY_SCAN_NOTE : "";
+  const scanSystem = `${SCAN_RULES}${securityNote}\n\n${specsBlock(specs)}`;
   const headings = specs.map(({ pass }) => `   - ${pass.firstHeading}`).join("\n");
   const verifySystem = `${VERIFY_RULES.replace("{HEADINGS}", headings)}\n\n${specsBlock(specs)}`;
 
@@ -1133,8 +1172,8 @@ async function auditOnce(
   const sides = defs.map((def) => ({
     def,
     row: request.rows.find((item) => item.key === def.id) ?? null,
-    android: rankSide("Android", request.androidPath, def.keywords, def.files?.android),
-    ios: rankSide("iOS", request.iosPath, def.keywords, def.files?.ios),
+    android: rankSide("Android", request.androidPath, def.keywords, def.files?.android, def.ordered),
+    ios: rankSide("iOS", request.iosPath, def.keywords, def.files?.ios, def.ordered),
   }));
   const sample = sides.flatMap((side) => [...side.android.files, ...side.ios.files]).slice(0, 40).map((file) => file.body).join("\n");
   await calibrate(client, scanModel(), sample || scanSystem);
@@ -1424,9 +1463,11 @@ function parseRef(ref: string): Ref | null {
 }
 
 function verifyUserMessage(request: AuditRequest, item: ModulePlan, candidates: Candidate[]): string {
+  // The module's own files too: the App-wide Security section reads config
+  // files (manifests, plists) that are not code sources, and cites them.
   const byPath = {
-    android: new Map(readSources(request.androidPath).map((source) => [source.relativePath, source])),
-    ios: new Map(readSources(request.iosPath).map((source) => [source.relativePath, source])),
+    android: new Map([...readSources(request.androidPath), ...item.android.files.map((file) => file.source)].map((source) => [source.relativePath, source])),
+    ios: new Map([...readSources(request.iosPath), ...item.ios.files.map((file) => file.source)].map((source) => [source.relativePath, source])),
   };
   // Windows per file, merged where they touch.
   const windows = { android: new Map<string, [number, number][]>(), ios: new Map<string, [number, number][]>() };

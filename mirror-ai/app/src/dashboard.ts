@@ -37,6 +37,8 @@ export interface RunMeta {
   jiraKey?: string;
   jiraUrl?: string;
   prUrl?: string;
+  /** The opt-in security skill ran: the report has Security Analysis sections. */
+  security?: boolean;
 }
 
 /** A module is stale when its last complete audit is older than this. */

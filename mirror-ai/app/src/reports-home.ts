@@ -32,6 +32,7 @@ export type Run = {
   jiraKey?: string;
   jiraUrl?: string;
   generatedBy?: string;
+  security?: boolean;
 };
 export type Report = { folder: string; run: Run; files: string[] };
 
@@ -46,7 +47,9 @@ const appName = (id: string) => APP_NAMES[id] ?? id.charAt(0).toUpperCase() + id
  */
 export function reportFolderName(appId: string, run: Run): string {
   const mods = run.scope === "project" ? [] : (run.modules ?? []).filter(Boolean);
-  const what = mods.length === 0 ? "ALL" : mods.length === 1 ? mods[0] : `${mods[0]}+${mods.length - 1}`;
+  const scope = mods.length === 0 ? "ALL" : mods.length === 1 ? mods[0] : `${mods[0]}+${mods.length - 1}`;
+  // A security audit gets its own folder (<App>-<scope>-SEC-<date>) next to the parity reports.
+  const what = run.security ? `${scope}-SEC` : scope;
   const t = run.date ? new Date(run.date) : new Date();
   const ist = new Date(t.getTime() + (5 * 60 + 30) * 60_000); // date in IST, as the READMEs show it
   return `${appName(appId)}-${what}-${ist.toISOString().slice(0, 10)}`.replace(/[^A-Za-z0-9_.+-]/g, "-");

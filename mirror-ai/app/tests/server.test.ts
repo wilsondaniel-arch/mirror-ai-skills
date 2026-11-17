@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import path from "node:path";
 import { test } from "node:test";
+import { readSkills } from "../src/audit.ts";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
 
@@ -176,7 +177,8 @@ test("the page lists enum modules in three groups and compares the ticked ones",
     // One request per section — the business logic and each skill — each
     // carrying the spec as a cached system prompt and the module's real source
     // on both sides as the evidence.
-    const sections = 1 + readdirSync(path.join(root, "prompts/skills")).filter((file) => file.endsWith(".md")).length;
+    // Opt-in skills (security) are not loaded unless asked for, so count the loaded ones.
+    const sections = 1 + readSkills(root).length;
     assert.equal(claude.requests.length, sections);
     const sent = claude.requests.find((request) =>
       /Android vs iOS — Business Logic & Behavioral Audit/.test(request.system[0].text),

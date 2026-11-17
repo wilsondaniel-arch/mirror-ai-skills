@@ -18,6 +18,10 @@
 #   <out_dir>/audit-scope.txt          read when none of the three is set (an Ark flow writes it
 #                                      from its inputs): "project", "common", or module names
 #                                      (override the path with MIRROR_AI_SCOPE_FILE)
+#   MIRROR_AI_SECURITY=1               add the opt-in security skill: a Security Analysis section per
+#                                      module and one App-wide Security section (off by default)
+#   <out_dir>/audit-skills.txt         read when MIRROR_AI_SECURITY is unset: a line "security" turns it
+#                                      on (an Ark flow writes it; override the path with MIRROR_AI_SKILLS_FILE)
 #   MIRROR_AI_MARKET                   recorded in the run log; the audit reads the market from code
 #   ANTHROPIC_API_KEY                  Batch API with a hard dollar cap (MIRROR_AI_BUDGET_USD, default 5);
 #                                      without it the signed-in `claude` CLI is used (subscription usage)
@@ -110,6 +114,17 @@ if [ -z "${MIRROR_AI_MODULES:-}${MIRROR_AI_MODULE:-}" ] && [ -z "${MIRROR_AI_COM
   echo "scope from $SCOPE_FILE: ${SCOPE:-project}" >&2
 fi
 
+# Opt-in skills, the same way: a flow that wants the security section leaves
+# "security" in audit-skills.txt. Without the file nothing changes.
+SKILLS_FILE="${MIRROR_AI_SKILLS_FILE:-$OUT/audit-skills.txt}"
+if [ -z "${MIRROR_AI_SECURITY:-}" ] && [ -f "$SKILLS_FILE" ] && grep -qiw "security" "$SKILLS_FILE"; then
+  export MIRROR_AI_SECURITY=1
+fi
+if [ -n "${MIRROR_AI_SECURITY:-}" ]; then
+  export MIRROR_AI_SECURITY
+  echo "security skill: ${MIRROR_AI_SECURITY}" >&2
+fi
+
 SELECT=()
 WANTED="${MIRROR_AI_MODULES:-${MIRROR_AI_MODULE:-}}"
 
@@ -160,6 +175,7 @@ LOG="$OUT/mirror-ai-run.log"
   echo "android: $ANDROID"
   echo "ios: $IOS"
   echo "selection: ${SELECT[*]}"
+  echo "security skill: ${MIRROR_AI_SECURITY:-off}"
 } > "$LOG"
 
 # A pipeline can drop an action that prints nothing for minutes (the scan only

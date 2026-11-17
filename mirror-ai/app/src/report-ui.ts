@@ -138,8 +138,9 @@ export function parseReport(markdown: string): { preamble: Block[]; modules: Mod
   return { preamble, modules };
 }
 
-function classify(title: string): "bl" | "ui" | "hc" | "api" | "summary" | "other" {
+function classify(title: string): "bl" | "ui" | "hc" | "api" | "sec" | "summary" | "other" {
   if (/business logic/i.test(title)) return "bl";
+  if (/security analysis/i.test(title)) return "sec";
   if (/ui difference/i.test(title)) return "ui";
   if (/hard-?coded/i.test(title)) return "hc";
   if (/api contract/i.test(title)) return "api";
@@ -216,18 +217,20 @@ type ModuleView = {
   ui: { platforms: Table | null; pairs: UiPair[]; notes: Block[] } | null;
   hc: { rows: HcRow[]; intro: string } | null;
   api: { blocks: Block[] } | null;
+  sec: { blocks: Block[] } | null;
   summary: Block[];
   other: Section[];
 };
 
 function buildView(mod: Module): ModuleView {
-  const view: ModuleView = { mod, bl: null, ui: null, hc: null, api: null, summary: [], other: [] };
+  const view: ModuleView = { mod, bl: null, ui: null, hc: null, api: null, sec: null, summary: [], other: [] };
   for (const sec of mod.sections) {
     const kind = classify(sec.title);
     if (kind === "bl") view.bl = parseBl(sec.blocks);
     else if (kind === "ui") view.ui = parseUi(sec.blocks);
     else if (kind === "hc") view.hc = parseHc(sec.blocks);
     else if (kind === "api") view.api = { blocks: sec.blocks };
+    else if (kind === "sec") view.sec = { blocks: sec.blocks };
     else if (kind === "summary") view.summary.push(...sec.blocks);
     else view.other.push(sec);
   }
@@ -427,7 +430,7 @@ function textNotices(blocks: Block[]): string {
   return out + proseHtml(rest);
 }
 
-const sevClass = (s: string) => (/high/i.test(s) ? "badge-high" : /medium/i.test(s) ? "badge-medium" : /low/i.test(s) ? "badge-low" : "badge-potential");
+const sevClass = (s: string) => (/critical|high/i.test(s) ? "badge-high" : /medium/i.test(s) ? "badge-medium" : /low/i.test(s) ? "badge-low" : "badge-potential");
 const confClass = (s: string) => (/^confirmed/i.test(s) ? "badge-confirmed" : "badge-potential");
 
 function idRange(ids: string[]): string {
@@ -638,6 +641,75 @@ function apiSection(v: ModuleView): { html: string; drift: number } {
   return { html: `<section id="sec-${v.mod.key}-api" class="section">${stats}${html}</section>`, drift };
 }
 
+/** Security Analysis: stat bar, one card per SEC finding, then Meta / Counts / Control parity / Hard-coded secrets / Not assessed. */
+function secSection(v: ModuleView): { html: string; critical: number; high: number; total: number } {
+  const blocks = v.sec!.blocks;
+  const groups: { title: string; blocks: Block[] }[] = [{ title: "", blocks: [] }];
+  for (const b of blocks) {
+    if (b.kind === "heading") groups.push({ title: b.text, blocks: [] });
+    else groups[groups.length - 1].blocks.push(b);
+  }
+  const findingsTable = groups.find((g) => /security findings/i.test(g.title))?.blocks.find((b) => b.kind === "table") as { table: Table } | undefined;
+  const secretsTable = groups.find((g) => /hard-?coded secrets/i.test(g.title))?.blocks.find((b) => b.kind === "table") as { table: Table } | undefined;
+  const parityTable = groups.find((g) => /control parity/i.test(g.title))?.blocks.find((b) => b.kind === "table") as { table: Table } | undefined;
+  const t = findingsTable?.table;
+  const ix = t
+    ? {
+        id: col(t, /^id$/i),
+        domain: col(t, /domain/i),
+        masvs: col(t, /masvs/i),
+        platform: col(t, /platform/i),
+        android: col(t, /android/i),
+        ios: col(t, /ios/i),
+        impact: col(t, /impact/i),
+        severity: col(t, /severity/i),
+        confidence: col(t, /confidence/i),
+      }
+    : null;
+  const rows = t && ix ? t.rows.filter((r) => /^SEC-\d+/i.test(plain(r[ix.id] ?? ""))) : [];
+  const sevOf = (r: string[]) => plain(r[ix!.severity] ?? "");
+  const count = (re: RegExp) => rows.filter((r) => re.test(sevOf(r))).length;
+  const critical = count(/critical/i), high = count(/^high/i), medium = count(/medium/i), low = count(/^low/i);
+  const secrets = secretsTable ? secretsTable.table.rows.filter((r) => /^SECRET-\d+/i.test(plain(r[0] ?? ""))).length : 0;
+  const gaps = parityTable ? parityTable.table.rows.filter((r) => /drift|only/i.test(r.join(" "))).length : 0;
+  const stats = statBar([
+    stat("Critical", critical, critical ? "Fix before release" : "None found", critical ? "red" : "green"),
+    stat("High", high, high ? "Sensitive data or missing control" : "None found", high ? "red" : "green"),
+    stat("Medium · Low", `${medium} · ${low}`, `${rows.length} finding${rows.length === 1 ? "" : "s"} in total`, medium ? "yellow" : ""),
+    stat("Parity Gaps · Secrets", `${gaps} · ${secrets}`, "Controls that differ · hard-coded values", gaps || secrets ? "yellow" : "green"),
+  ]);
+  const cards = rows
+    .map((r, n) => {
+      const badges = [
+        `<span class="badge ${sevClass(sevOf(r))}">${esc(sevOf(r) || "—")}</span>`,
+        `<span class="badge ${confClass(plain(r[ix!.confidence] ?? ""))}">${esc(plain(r[ix!.confidence] ?? "") || "—")}</span>`,
+        ix!.masvs >= 0 ? `<span class="badge badge-potential">${esc(plain(r[ix!.masvs] ?? ""))}</span>` : "",
+        ix!.platform >= 0 ? `<span class="badge badge-low">${esc(plain(r[ix!.platform] ?? ""))}</span>` : "",
+      ].join("");
+      const impact = r[ix!.impact] ?? "";
+      return card(
+        `${v.mod.key}-${slug(plain(r[ix!.id] ?? `sec-${n}`))}`,
+        cardHead(plain(r[ix!.id] ?? ""), plain(r[ix!.domain] ?? "")),
+        badges,
+        `${impact ? `<div class="impact-bar"><strong>Impact:</strong> ${inline(splitCitations(impact).prose)}</div>` : ""}<div class="split-view">${pane("Android", "android", r[ix!.android] ?? "")}${pane("iOS", "ios", r[ix!.ios] ?? "")}</div>`,
+        n === 0,
+      );
+    })
+    .join("");
+  let rest = "";
+  for (const g of groups) {
+    if (/security findings/i.test(g.title) && t) continue;
+    if (/^counts$/i.test(g.title)) continue; // the stat bar shows them
+    if (g.title) rest += secHead(g.title);
+    rest += textNotices(g.blocks);
+  }
+  return {
+    html: `<section id="sec-${v.mod.key}-sec" class="section">${stats}${rows.length ? secHead("Security findings") + cards : ""}${rest}</section>`,
+    critical,
+    high,
+    total: rows.length,
+  };
+}
 
 // ─────────────────────────── document ───────────────────────────
 
@@ -680,18 +752,27 @@ export function renderReportUi(markdown: string, opts: { title?: string; meta?: 
       tabs.push({ key: "api", label: "API Contract", count: drift ? `${drift} drift` : "–", hot: drift > 0 });
       sections.push(a.html);
     }
-    const sum = [`${blRows.length} BL diff${blRows.length === 1 ? "" : "s"}`, v.ui ? `${v.ui.pairs.length} UI pair${v.ui.pairs.length === 1 ? "" : "s"}` : "", v.hc ? `${v.hc.rows.length} strings` : "", v.api ? `${drift} API drift` : ""].filter(Boolean).join(" · ");
+    let secTotal = 0;
+    if (v.sec) {
+      const sx = secSection(v);
+      secTotal = sx.total;
+      tabs.push({ key: "sec", label: "Security", count: String(sx.total), hot: sx.critical + sx.high > 0 });
+      sections.push(sx.html);
+    }
+    const sum = [`${blRows.length} BL diff${blRows.length === 1 ? "" : "s"}`, v.ui ? `${v.ui.pairs.length} UI pair${v.ui.pairs.length === 1 ? "" : "s"}` : "", v.hc ? `${v.hc.rows.length} strings` : "", v.api ? `${drift} API drift` : "", v.sec ? `${secTotal} security` : ""].filter(Boolean).join(" · ");
     tiles.push(
-      `<button class="mod-tile" data-module="${k}" title="${esc(sum)}" aria-label="${esc(`${v.mod.name}: ${sum}`)}" onclick="location.hash='${k}'"><span class="mod-name">${esc(v.mod.name)}</span><span class="mod-status">${blRows.length}</span></button>`,
+      `<button class="mod-tile" data-module="${k}" title="${esc(sum)}" aria-label="${esc(`${v.mod.name}: ${sum}`)}" onclick="location.hash='${k}'"><span class="mod-name">${esc(v.mod.name)}</span><span class="mod-status">${v.bl || !v.sec ? blRows.length : secTotal}</span></button>`,
     );
     navs.push(
       `<div class="nav-tabs-inner" data-module="${k}" hidden>${tabs
         .map((t) => `<button class="tab-btn" data-module="${k}" data-key="${t.key}" onclick="location.hash='${k}-${t.key}'">${esc(t.label)}${t.count ? ` <span class="tab-count${t.hot ? " has-high" : ""}">${esc(t.count)}</span>` : ""}</button>`)
         .join("")}</div>`,
     );
-    const sub = blRows.length
-      ? `${high ? `${high} high-severity difference${high === 1 ? "" : "s"}` : "No high-severity differences"} out of ${blRows.length} business-logic finding${blRows.length === 1 ? "" : "s"}.`
-      : "No business-logic difference found.";
+    const sub = !v.bl && v.sec
+      ? `${secTotal} security finding${secTotal === 1 ? "" : "s"} across the whole app's security layers.`
+      : blRows.length
+        ? `${high ? `${high} high-severity difference${high === 1 ? "" : "s"}` : "No high-severity differences"} out of ${blRows.length} business-logic finding${blRows.length === 1 ? "" : "s"}.`
+        : "No business-logic difference found.";
     cfg[k] = {
       tabs: tabs.map((t) => t.key),
       eyebrow: `${v.mod.name} · ${sprint} · Android vs iOS`,

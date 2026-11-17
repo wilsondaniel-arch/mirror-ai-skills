@@ -10,6 +10,7 @@ import { buildModuleCatalog, moduleDefs, moduleKey, type ModuleRow } from "./enu
 import { buildModuleLeadsMap } from "./leads-builder.ts";
 import { loadProjectEnv } from "./load-env.ts";
 import { miscellaneousDef } from "./misc-scope.ts";
+import { SECURITY_MODULE_ID, SECURITY_MODULE_LABEL, securityBaselineDef, securityEnabled } from "./security-scope.ts";
 import { MISC_MODULE_ID } from "./types.ts";
 import { listSavedReports, reportsDir } from "./report-store.ts";
 
@@ -97,13 +98,16 @@ export async function main(argv: string[]): Promise<number> {
   // "miscellaneous" is not a module of either app: it is the whole-project
   // remainder, so it can be asked for on its own (to redo just that section).
   const wantsMisc = named.some((name) => moduleKey(name) === moduleKey(MISC_MODULE_ID));
-  const wanted = named.filter((name) => moduleKey(name) !== moduleKey(MISC_MODULE_ID));
+  // "App-wide Security" is not a module either: asking for it alone redoes just that section.
+  const isSecurityName = (name: string) => [SECURITY_MODULE_ID, SECURITY_MODULE_LABEL].some((id) => moduleKey(name) === moduleKey(id));
+  const wantsSecurity = named.some(isSecurityName);
+  const wanted = named.filter((name) => moduleKey(name) !== moduleKey(MISC_MODULE_ID) && !isSecurityName(name));
   const whole = argv.includes("--all");
   // A whole-project audit runs every common module, then one Miscellaneous
   // section for everything else: platform-only modules, modules missing from
   // the enum, and code that belongs to no module.
   const selected = whole ? catalog.common : argv.includes("--common") ? catalog.common : pick(rows, wanted);
-  if (selected.length === 0 && !wantsMisc) {
+  if (selected.length === 0 && !wantsMisc && !(wantsSecurity && securityEnabled())) {
     console.error(
       wanted.length > 0
         ? `No module matched ${wanted.join(", ")}. Run with --list to see the names.`
@@ -122,6 +126,15 @@ export async function main(argv: string[]): Promise<number> {
     if (misc) {
       defs.push(misc);
       note(`Miscellaneous: ${misc.files?.android.length ?? 0} Android and ${misc.files?.ios.length ?? 0} iOS file(s) no common module claims.`);
+    }
+  }
+  // With the security skill on, the app-wide controls are judged once, in a
+  // last section of their own, whatever the module scope.
+  if (securityEnabled()) {
+    const security = securityBaselineDef(checkouts.androidPath, checkouts.iosPath);
+    if (security) {
+      defs.push(security);
+      note(`App-wide Security: ${security.files?.android.length ?? 0} Android and ${security.files?.ios.length ?? 0} iOS security file(s).`);
     }
   }
   if (argv.includes("--estimate")) {

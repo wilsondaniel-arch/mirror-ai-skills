@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import type { RunMeta } from "./dashboard.ts";
 import { reportFolderName } from "./reports-home.ts";
 import { branchLabel } from "./branch-label.ts";
+import { securityEnabled } from "./security-scope.ts";
 
 export const REPORTS_WEB_DEFAULT = "https://bitbucket.org/paytmteam/superapp-workspace";
 
@@ -33,7 +34,7 @@ export function appIdForMarket(market: string): string {
 }
 
 /** Every app publishes to one branch, under reports/<app>/ (override with MIRROR_AI_REPORTS_BRANCH). */
-export const REPORTS_BRANCH_DEFAULT = "reports/mirror-ai-reports-home";
+export const REPORTS_BRANCH_DEFAULT = "mirror-ai-reports";
 export function reportsBranch(_appId: string, env: NodeJS.ProcessEnv = process.env): string {
   return env.MIRROR_AI_REPORTS_BRANCH?.trim() || REPORTS_BRANCH_DEFAULT;
 }
@@ -125,7 +126,8 @@ export function buildRunMeta(input: {
   const { scope, modules } = input.scope ?? readScope(input.scopeFile);
   const session = env.WORKSPACE_ROOT ? path.basename(env.WORKSPACE_ROOT) : "";
   const who = generatedBy(env);
-  const folder = reportFolderName(app, { scope, modules, generatedBy: who, date: now.toISOString() });
+  const security = securityEnabled(env);
+  const folder = reportFolderName(app, { scope, modules, generatedBy: who, date: now.toISOString(), security });
   const branchRef = reportsBranch(app, env);
   const web = (env.MIRROR_AI_REPORTS_WEB?.trim() || REPORTS_WEB_DEFAULT).replace(/\/+$/, "");
   return {
@@ -138,6 +140,7 @@ export function buildRunMeta(input: {
     android: { branch: auditedBranch(input.androidPath, env.MIRROR_AI_ANDROID_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.androidPath, ["rev-parse", "HEAD"]) },
     ios: { branch: auditedBranch(input.iosPath, env.MIRROR_AI_IOS_BRANCH || env.MIRROR_AI_BRANCH), commit: git(input.iosPath, ["rev-parse", "HEAD"]) },
     ...(session ? { sessionId: session } : {}),
+    ...(security ? { security: true } : {}),
     generatedBy: who,
     folder,
     branchRef,

@@ -14,7 +14,35 @@ import { pathToFileURL } from "node:url";
 export type Severity = "High" | "Medium" | "Low";
 export type Confidence = "Confirmed" | "Runtime" | "Potential" | "Requirements gap" | "Unknown";
 export type Status = "red" | "amber" | "green" | "grey";
-export type FindingKind = "business-logic" | "api-high-risk" | "api-drift" | "api-stale-constant" | "api-base-url" | "ui-divergent";
+export type FindingKind = "business-logic" | "api-high-risk" | "api-drift" | "api-stale-constant" | "api-base-url" | "ui-divergent" | "security";
+export type SecuritySeverity = "Critical" | "High" | "Medium" | "Low" | "Info";
+
+/** One row of a Security Analysis "Security findings" table. */
+export interface SecurityFinding {
+  id: string;
+  domain: string;
+  masvs: string;
+  platform: string;
+  severity: SecuritySeverity;
+  confidence: Confidence;
+  /** The row is marked `App-wide`: a control of the whole app, not of this module. */
+  appWide: boolean;
+  files: string[];
+  fingerprint: string;
+}
+
+/** Security Analysis numbers, kept apart from the parity score and counts. */
+export interface SecurityCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+  /** Rows of the Hard-coded secrets table. */
+  secrets: number;
+  /** Rows of the Control parity table (controls that differ between the platforms). */
+  parityGaps: number;
+}
 
 export interface Finding {
   kind: FindingKind;
@@ -46,6 +74,8 @@ export interface ModuleSummary {
   /** Null when the business-logic section could not be produced: there is nothing to score. */
   score: number | null;
   status: Status;
+  /** Present only when the module has a Security Analysis section (the opt-in security skill). */
+  security?: { findings: SecurityFinding[]; counts: SecurityCounts };
 }
 
 export interface ReportSummary {
@@ -55,6 +85,8 @@ export interface ReportSummary {
   /** Mean of the non-Miscellaneous module scores, or null if there are none. */
   score: number | null;
   status: Status;
+  /** Present only when some module has a Security Analysis section. */
+  securityTotals?: SecurityCounts;
 }
 
 export const SEVERITY_WEIGHT: Record<Severity, number> = { High: 10, Medium: 4, Low: 1 };
@@ -71,6 +103,10 @@ const HARDCODED_CAP = 5;
 export const MIN_COVERAGE = 0.8;
 
 const MODULE_HEADING = /^# Business logic audit — (.+)$/;
+/** moduleKeyOf("App-wide Security"). */
+const SECURITY_MODULE_KEY = "appwidesecurity";
+/** Security rows also cite config files: manifests, plists, ProGuard, gradle, lockfiles. */
+const SECURITY_FILE_REF = /[A-Za-z0-9_.+\-/]+\.(?:kt|kts|java|swift|xml|plist|pro|gradle|toml|entitlements|xcconfig|resolved|lock)\b/g;
 const FILE_REF = /[A-Za-z0-9_.+\-/]+\.(?:kt|kts|java|swift)\b/g;
 
 export function moduleKeyOf(label: string): string {
@@ -79,7 +115,8 @@ export function moduleKeyOf(label: string): string {
 
 export function summarizeReport(markdown: string): ReportSummary {
   const modules = splitModules(markdown).map(({ label, body }) => summarizeModule(label, body));
-  const scored = modules.filter((module) => !module.miscellaneous && module.score !== null);
+  // The App-wide Security section has no parity matrix: like Miscellaneous, it never counts toward the parity score.
+  const scored = modules.filter((module) => !module.miscellaneous && module.key !== SECURITY_MODULE_KEY && module.score !== null);
   const totals = {
     modules: modules.length,
     incompleteModules: modules.filter((module) => module.incompleteSections.length > 0).length,
@@ -96,7 +133,16 @@ export function summarizeReport(markdown: string): ReportSummary {
   }
   const score = scored.length ? round(scored.reduce((sum, module) => sum + (module.score ?? 0), 0) / scored.length) : null;
   const statuses = modules.filter((module) => !module.miscellaneous).map((module) => module.status);
-  return { version: 1, modules, totals, score, status: worstStatus(statuses) };
+  const withSecurity = modules.filter((module) => module.security);
+  const summary: ReportSummary = { version: 1, modules, totals, score, status: worstStatus(statuses) };
+  if (withSecurity.length > 0) {
+    const securityTotals: SecurityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0, secrets: 0, parityGaps: 0 };
+    for (const module of withSecurity) {
+      for (const key of Object.keys(securityTotals) as (keyof SecurityCounts)[]) securityTotals[key] += module.security!.counts[key];
+    }
+    summary.securityTotals = securityTotals;
+  }
+  return summary;
 }
 
 function splitModules(markdown: string): { label: string; body: string[] }[] {
@@ -128,7 +174,9 @@ function sections(lines: string[]): Map<string, string[]> {
             ? "ui"
             : title.includes("api contract drift")
               ? "api"
-              : current;
+              : title.includes("security analysis")
+                ? "sec"
+                : current;
       if (!map.has(current)) map.set(current, []);
       continue;
     }
@@ -251,6 +299,8 @@ function summarizeModule(label: string, lines: string[]): ModuleSummary {
     }
   }
 
+  const security = parts.has("sec") ? securityOf(key, parts.get("sec") ?? []) : undefined;
+
   const coverage = coverageOf(lines);
   const counts = {
     high: findings.filter((item) => item.severity === "High").length,
@@ -263,8 +313,10 @@ function summarizeModule(label: string, lines: string[]): ModuleSummary {
   };
   const penalty =
     findings.reduce((sum, item) => sum + item.weight, 0) + Math.min(HARDCODED_CAP, hardcodedCopy * HARDCODED_WEIGHT);
-  const score = incompleteSections.includes("bl") ? null : round(Math.max(0, 100 - penalty));
+  // The App-wide Security section has no business-logic matrix to score.
+  const score = incompleteSections.includes("bl") || key === SECURITY_MODULE_KEY ? null : round(Math.max(0, 100 - penalty));
   const miscellaneous = key === "miscellaneous";
+  const status = statusOf({ score, counts, coverage, incomplete: incompleteSections.length > 0, security: security?.counts });
   return {
     key,
     label,
@@ -274,7 +326,63 @@ function summarizeModule(label: string, lines: string[]): ModuleSummary {
     coverage,
     incompleteSections,
     score,
-    status: statusOf({ score, counts, coverage, incomplete: incompleteSections.length > 0 }),
+    status,
+    ...(security ? { security } : {}),
+  };
+}
+
+function parseSecuritySeverity(text: string): SecuritySeverity | null {
+  const value = text.replace(/\*/g, "").trim().toLowerCase();
+  if (value === "critical") return "Critical";
+  if (value === "high") return "High";
+  if (value === "medium") return "Medium";
+  if (value === "low") return "Low";
+  if (value === "info") return "Info";
+  return null;
+}
+
+/**
+ * Security Analysis subsections: "Security findings" rows
+ * (| ID | Domain | MASVS | Platform | Android | iOS | Impact | Severity | Confidence |),
+ * "Hard-coded secrets" rows and "Control parity" rows.
+ */
+function securityOf(moduleKey: string, lines: string[]): { findings: SecurityFinding[]; counts: SecurityCounts } {
+  const parts = subsections(lines);
+  const findings: SecurityFinding[] = [];
+  for (const row of (parts.get("security findings") ?? []).filter((line) => /^\|\s*SEC-\d+/.test(line.trim()))) {
+    const c = cells(row);
+    if (c.length < 9) continue;
+    // Severity and confidence from the end, so a stray pipe in a cell cannot shift them.
+    const severity = parseSecuritySeverity(c[c.length - 2]);
+    if (!severity) continue;
+    const files = [...new Set(c.slice(4, -2).join(" ").match(SECURITY_FILE_REF) ?? [])].sort();
+    const domain = c[1].replace(/\*/g, "").trim();
+    findings.push({
+      id: c[0].replace(/\*/g, "").trim(),
+      domain,
+      masvs: c[2].replace(/\*/g, "").trim(),
+      platform: c[3].replace(/\*/g, "").trim(),
+      severity,
+      confidence: parseConfidence(c[c.length - 1]),
+      appWide: /app-?wide/i.test(domain),
+      files,
+      fingerprint: fingerprint(moduleKey, "security", `${domain} ${c[c.length - 3] ?? ""}`, files),
+    });
+  }
+  const rows = (name: string, id: RegExp) => (parts.get(name) ?? []).filter((line) => id.test(line.trim())).length;
+  const parityGaps = (parts.get("control parity") ?? []).filter(isDataRow).slice(1).filter((line) => /drift|android only|ios only/i.test(line)).length;
+  const bySeverity = (severity: SecuritySeverity) => findings.filter((item) => item.severity === severity).length;
+  return {
+    findings,
+    counts: {
+      critical: bySeverity("Critical"),
+      high: bySeverity("High"),
+      medium: bySeverity("Medium"),
+      low: bySeverity("Low"),
+      info: bySeverity("Info"),
+      secrets: rows("hard-coded secrets", /^\|\s*SECRET-\d+/),
+      parityGaps,
+    },
   };
 }
 
@@ -302,10 +410,19 @@ export function coverageOf(lines: string[]): number | null {
   return total === 0 ? 1 : round(read / total, 3);
 }
 
-export function statusOf(input: { score: number | null; counts: ModuleSummary["counts"]; coverage: number | null; incomplete: boolean }): Status {
+export function statusOf(input: {
+  score: number | null;
+  counts: ModuleSummary["counts"];
+  coverage: number | null;
+  incomplete: boolean;
+  security?: SecurityCounts;
+}): Status {
+  // A Critical security finding is red on its own; a High one is at least amber.
+  if (input.security?.critical) return "red";
+  if (input.score === null && input.security && !input.incomplete) return input.security.high ? "amber" : "green";
   if (input.score === null || input.incomplete || (input.coverage !== null && input.coverage < MIN_COVERAGE)) return "grey";
   if (input.counts.highConfirmed > 0 || input.score < 60) return "red";
-  if (input.counts.high > 0 || input.score < 80) return "amber";
+  if (input.counts.high > 0 || input.score < 80 || (input.security?.high ?? 0) > 0) return "amber";
   return "green";
 }
 

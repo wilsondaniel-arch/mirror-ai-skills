@@ -93,6 +93,11 @@ export interface ModuleDef {
    * Miscellaneous section. When set, `keywords` is not used to pick files.
    */
   files?: { android: string[]; ios: string[] };
+  /**
+   * Read `files` in the order given instead of re-ranking them, and read
+   * non-code files too (manifests, plists). Set by the App-wide Security section.
+   */
+  ordered?: boolean;
 }
 
 /** Id of the whole-project audit's last section: code no common module claims. */

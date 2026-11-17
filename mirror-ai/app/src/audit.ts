@@ -35,6 +35,7 @@ import {
   rankFilesForKeywords,
 } from "./codegraph.ts";
 import { auditModuleOnBudget, estimateBudgetAudit, type BudgetEstimate } from "./budget-audit.ts";
+import { isSecurityDef, passesFor, SECURITY_SKILL, securityEnabled } from "./security-scope.ts";
 const MAX_FILES_PER_SIDE = 40;
 /** Characters of source per platform, for the bundled fallback. ~4 chars a token. */
 const EVIDENCE_BUDGET = Number(process.env.MIRROR_AI_EVIDENCE_BUDGET) || 200_000;
@@ -113,10 +114,14 @@ export function readSkills(projectRoot: string): { name: string; text: string }[
   } catch {
     return [];
   }
-  const skills = entries.map((file) => ({
-    name: path.basename(file, ".md"),
-    text: readFileSync(path.join(dir, file), "utf8"),
-  }));
+  const skills = entries
+    // The security skill is opt-in (MIRROR_AI_SECURITY=1), so audits that do
+    // not ask for it keep exactly the passes and prompts they had.
+    .filter((file) => path.basename(file, ".md") !== SECURITY_SKILL || securityEnabled())
+    .map((file) => ({
+      name: path.basename(file, ".md"),
+      text: readFileSync(path.join(dir, file), "utf8"),
+    }));
   // The section number a skill publishes decides its place, so a filename
   // never has to be chosen to make the numbering come out right.
   return skills.sort((left, right) => sectionNumber(left.text) - sectionNumber(right.text));
@@ -228,10 +233,11 @@ export interface PassResult {
  */
 export async function auditModules(request: AuditRequest): Promise<AuditResult> {
   const passes = auditPasses(request.projectRoot);
-  const tasks = request.defs.flatMap((def) => passes.map((pass) => ({ def, pass })));
+  // The App-wide Security section runs only the security pass; every other module runs all of them.
+  const tasks = request.defs.flatMap((def, index) => passesFor(def, passes).map((pass) => ({ def, pass, index })));
   const results = await mapWithLimit(tasks, CONCURRENCY, ({ def, pass }) => runPass(request, def, pass));
   const modules = request.defs.map((def, index) => {
-    const mine = results.slice(index * passes.length, (index + 1) * passes.length);
+    const mine = results.filter((_, at) => tasks[at].index === index);
     const fresh = mine.filter((result) => !result.cached);
     return {
       markdown: [moduleHeading(def, request.mode), ...mine.map((result) => result.markdown)].join("\n\n"),
@@ -365,14 +371,18 @@ function reportIdentity(request: AuditRequest, def: ModuleDef, pass: AuditPass, 
 export function estimateBudget(request: AuditRequest): Promise<BudgetEstimate> {
   const passes = auditPasses(request.projectRoot);
   const specs = passes.map((item) => ({ pass: item, spec: passSpec(request, item) }));
-  const pending = request.defs.filter((item) => passes.some((candidate) => !savedPass(request, item, candidate)));
+  const pending = request.defs.filter((item) => !isSecurityDef(item) && passes.some((candidate) => !savedPass(request, item, candidate)));
   return estimateBudgetAudit(request, pending, specs);
 }
 
 async function runBudget(pass: AuditPass, request: AuditRequest, def: ModuleDef): Promise<string> {
-  const passes = auditPasses(request.projectRoot);
+  // One batch per kind of module: the App-wide Security section asks only for
+  // the security section, so it never shares a batch (or specs) with the rest.
+  const passes = passesFor(def, auditPasses(request.projectRoot));
   const specs = passes.map((item) => ({ pass: item, spec: passSpec(request, item) }));
-  const pending = request.defs.filter((item) => passes.some((candidate) => !savedPass(request, item, candidate)));
+  const pending = request.defs.filter(
+    (item) => isSecurityDef(item) === isSecurityDef(def) && passes.some((candidate) => !savedPass(request, item, candidate)),
+  );
   const outcome = await auditModuleOnBudget(request, def, pending, specs);
   if (outcome.error) throw new Error(outcome.error);
   const markdown = outcome.sections?.[pass.id];
