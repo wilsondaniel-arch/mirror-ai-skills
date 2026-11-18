@@ -178,6 +178,7 @@ LOG="$OUT/mirror-ai-run.log"
   echo "security skill: ${MIRROR_AI_SECURITY:-off}"
 } > "$LOG"
 
+
 # A pipeline can drop an action that prints nothing for minutes (the scan only
 # reports every 10 requests), so say we are alive every 30 seconds.
 ( while sleep 30; do echo "[mirror-ai] $(date -u +%H:%M:%S) audit running" >&2; done ) &
@@ -190,6 +191,56 @@ render_report_ui() {
     || echo "warning: report UI not rendered; parity-report.html keeps the plain layout" >&2
 }
 
+# The report folder the publish step will use: <App>-<scope>-<date>, or -2, -3 when a
+# report of another session already sits there today. Publish picks the same name
+# (same rule, same branch), but the jira stage runs before publish and links to
+# run.json's reportUrl, so the name is settled here. Best effort: never fails the audit.
+reserve_report_folder() {
+  local run="$OUT/run.json"
+  [ -f "$run" ] || return 0
+  local repo="${MIRROR_AI_REPORTS_REPO:-git@bitbucket.org:paytmteam/superapp-workspace.git}"
+  local branch app folder sid tmp dest n
+  branch="$(node -e 'process.stdout.write(String(require(process.argv[1]).branchRef||""))' "$run" 2>/dev/null)"
+  app="$(node -e 'process.stdout.write(String(require(process.argv[1]).app||""))' "$run" 2>/dev/null)"
+  folder="$(node -e 'process.stdout.write(String(require(process.argv[1]).folder||""))' "$run" 2>/dev/null)"
+  sid="$(node -e 'process.stdout.write(String(require(process.argv[1]).sessionId||""))' "$run" 2>/dev/null)"
+  [ -n "$branch" ] && [ -n "$app" ] && [ -n "$folder" ] || return 0
+  # Strip an earlier -N so a rerun of this step starts from the base name.
+  folder="$(printf '%s' "$folder" | sed -E 's/(-[0-9]{4}-[0-9]{2}-[0-9]{2})-[0-9]+$/\1/')"
+  tmp="$(mktemp -d)"
+  if ! timeout 120 git clone --quiet --depth 1 --filter=blob:none --no-checkout -b "$branch" "$repo" "$tmp/r" 2>/dev/null; then
+    rm -rf "$tmp"; echo "report folder: $folder (reports branch not reachable; publish settles the name)" >&2; return 0
+  fi
+  dest="$folder"; n=2
+  while git -C "$tmp/r" cat-file -e "HEAD:reports/$app/$dest/run.json" 2>/dev/null \
+    && [ "$(git -C "$tmp/r" show "HEAD:reports/$app/$dest/run.json" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).sessionId||""))}catch{}})')" != "$sid" -o -z "$sid" ]; do
+    dest="$folder-$n"; n=$((n + 1))
+  done
+  rm -rf "$tmp"
+  node -e '
+    const fs = require("fs"), [file, dest] = process.argv.slice(1);
+    const r = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (r.folder !== dest) {
+      for (const k of ["reportUrl", "reportMdUrl"]) if (r[k]) r[k] = r[k].replace("/" + r.folder + "/", "/" + dest + "/");
+      r.folder = dest;
+      fs.writeFileSync(file, JSON.stringify(r, null, 2) + "\n");
+    }' "$run" "$dest" 2>/dev/null || true
+  echo "report folder: $dest" >&2
+}
+
+# An audit where no module could be produced (a usage limit, an auth failure) is a
+# failure, not a clean report: stop here so the flow files no empty ticket, and a
+# restart of this stage redoes the modules (see "completing an earlier run").
+fail_if_nothing_produced() {
+  [ -f "$OUT/summary.json" ] || return 0
+  node -e '
+    const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).totals || {};
+    if (t.modules > 0 && t.incompleteModules >= t.modules) {
+      console.error(`error: none of the ${t.modules} module(s) could be produced (see mirror-ai-run.log: usually a Claude usage limit or auth failure). Restart this stage when the limit resets; finished modules are kept.`);
+      process.exit(1);
+    }' "$OUT/summary.json"
+}
+
 # The report is written by the tool, not by an agent, so it matches a local run exactly.
 if [ -n "$PREVIOUS_SCOPE" ]; then
   npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/redone-modules.md" 2>&1 | tee -a "$LOG" >&2
@@ -198,12 +249,14 @@ if [ -n "$PREVIOUS_SCOPE" ]; then
   # The run keeps the scope it started with; only the missing modules were redone.
   read -r RUN_SCOPE RUN_MODULES <<<"$PREVIOUS_SCOPE" || true
   node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "${RUN_MODULES:-}" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
+  reserve_report_folder 2>&1 | tee -a "$LOG" >&2 || true
   node -e '
     const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const t = s.totals;
     console.error(`${t.modules} module(s), ${t.incompleteModules} still incomplete, score ${s.score}, status ${s.status}, High ${t.high} (${t.highConfirmed} confirmed), Medium ${t.medium}, Low ${t.low}`);' "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || true
   render_report_ui
   echo "Report: $OUT/parity-report.md" >&2
+  fail_if_nothing_produced || exit 1
   exit 0
 fi
 npm run audit --silent -- --android "$ANDROID" --ios "$IOS" "${SELECT[@]}" --out "$OUT/parity-report.md" 2>&1 | tee -a "$LOG" >&2
@@ -224,9 +277,11 @@ elif [ "${SELECT[0]}" = "--common" ]; then RUN_SCOPE=modules; RUN_MODULES=common
 else RUN_SCOPE=modules; RUN_MODULES="${WANTED//,/ }"; fi
 node --experimental-strip-types src/report-summary.ts "$OUT/parity-report.md" --out "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || echo "warning: summary.json not written" >&2
 node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "$RUN_MODULES" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
+reserve_report_folder 2>&1 | tee -a "$LOG" >&2 || true
 render_report_ui
 
 echo "Report: $OUT/parity-report.md" >&2
 [ -f "$OUT/parity-report.html" ] && echo "HTML:   $OUT/parity-report.html" >&2
 [ -f "$OUT/parity-report.pdf" ] && echo "PDF:    $OUT/parity-report.pdf" >&2 || echo "PDF:    not produced (Chrome is needed to print it)" >&2
 grep -E "Budget:|API-equivalent usage" "$LOG" | tail -1 >&2 || true
+fail_if_nothing_produced || exit 1
