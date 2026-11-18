@@ -29,6 +29,12 @@ export interface SecurityFinding {
   appWide: boolean;
   files: string[];
   fingerprint: string;
+  /** The security rule (`SR-…`) or `NEW`; absent in reports written before the Rule column. */
+  rule?: string;
+  /** Cited `path:line` locations (sorted), used to tell one root cause from another in the same file. */
+  locations?: string[];
+  /** Set when an earlier finding has the same rule and cites the same locations: `<module> <id>`. */
+  duplicateOf?: string;
 }
 
 /** Security Analysis numbers, kept apart from the parity score and counts. */
@@ -85,8 +91,12 @@ export interface ReportSummary {
   /** Mean of the non-Miscellaneous module scores, or null if there are none. */
   score: number | null;
   status: Status;
-  /** Present only when some module has a Security Analysis section. */
+  /** Present only when some module has a Security Analysis section. Duplicates (see `duplicateOf`) are not counted. */
   securityTotals?: SecurityCounts;
+  /** Present only when findings carry a Rule: the findings mapped to each rule, as `<module> <id>`. */
+  securityRules?: { rule: string; findings: string[] }[];
+  /** Findings dropped from securityTotals because they repeat an earlier finding's rule and files. */
+  securityDuplicates?: number;
 }
 
 export const SEVERITY_WEIGHT: Record<Severity, number> = { High: 10, Medium: 4, Low: 1 };
@@ -140,9 +150,62 @@ export function summarizeReport(markdown: string): ReportSummary {
     for (const module of withSecurity) {
       for (const key of Object.keys(securityTotals) as (keyof SecurityCounts)[]) securityTotals[key] += module.security!.counts[key];
     }
+    const { rules, duplicates } = linkSecurityRules(withSecurity);
+    for (const finding of duplicates) {
+      const key = finding.severity.toLowerCase() as keyof SecurityCounts;
+      securityTotals[key] -= 1;
+    }
     summary.securityTotals = securityTotals;
+    if (rules.length > 0) {
+      summary.securityRules = rules;
+      summary.securityDuplicates = duplicates.length;
+    }
   }
   return summary;
+}
+
+/**
+ * Groups security findings by rule and marks repeats: a finding with the same
+ * rule and the same cited files as an earlier one (the App-wide section first,
+ * then report order) is a duplicate of it. `NEW` and uncited rows never merge.
+ */
+function linkSecurityRules(modules: ModuleSummary[]): { rules: { rule: string; findings: string[] }[]; duplicates: SecurityFinding[] } {
+  const ordered = [...modules].sort((left, right) => Number(right.key === SECURITY_MODULE_KEY) - Number(left.key === SECURITY_MODULE_KEY));
+  const byRule = new Map<string, string[]>();
+  const first = new Map<string, string>();
+  const duplicates: SecurityFinding[] = [];
+  for (const module of ordered) {
+    for (const finding of module.security!.findings) {
+      if (!finding.rule) continue;
+      const label = `${module.label} ${finding.id}`;
+      byRule.set(finding.rule, [...(byRule.get(finding.rule) ?? []), label]);
+      if (finding.rule === "NEW" || finding.files.length === 0) continue;
+      // Same rule at the same cited lines: a different line in the same file can be a different root cause.
+      const key = `${finding.rule}|${(finding.locations ?? finding.files).join(",")}`;
+      const earlier = first.get(key);
+      if (earlier) {
+        finding.duplicateOf = earlier;
+        duplicates.push(finding);
+      } else first.set(key, label);
+    }
+  }
+  const rules = [...byRule.entries()]
+    .map(([rule, findings]) => ({ rule, findings }))
+    .sort((left, right) => left.rule.localeCompare(right.rule));
+  return { rules, duplicates };
+}
+
+/** `path/File.kt:12` (a range keeps its start line) for every file cited, sorted; a file cited without a line counts as itself. */
+function citedLocations(text: string): string[] {
+  const out = new Set<string>();
+  for (const match of text.matchAll(new RegExp(`(${SECURITY_FILE_REF.source})(?::(\\d+))?`, "g"))) out.add(match[2] ? `${match[1]}:${match[2]}` : match[1]);
+  return [...out].sort();
+}
+
+/** The rule cell: `SR-AREA-NNN`, `NEW`, or undefined when the cell names neither. */
+function parseRule(text: string): string | undefined {
+  const match = /\bSR-[A-Z][A-Z0-9]*-\d{3,}\b|\bNEW\b/i.exec(text.replace(/\*/g, ""));
+  return match ? match[0].toUpperCase() : undefined;
 }
 
 function splitModules(markdown: string): { label: string; body: string[] }[] {
@@ -349,24 +412,41 @@ function parseSecuritySeverity(text: string): SecuritySeverity | null {
 function securityOf(moduleKey: string, lines: string[]): { findings: SecurityFinding[]; counts: SecurityCounts } {
   const parts = subsections(lines);
   const findings: SecurityFinding[] = [];
-  for (const row of (parts.get("security findings") ?? []).filter((line) => /^\|\s*SEC-\d+/.test(line.trim()))) {
+  const table = parts.get("security findings") ?? [];
+  // Columns by header name, so the Rule column (and any later one) does not shift
+  // the rest; reports written before it fall back to the original positions.
+  const header = table.find((line) => /^\|\s*\**ID\**\s*\|/i.test(line.trim()));
+  const names = header ? cells(header).map((cell) => cell.replace(/\*/g, "").trim().toLowerCase()) : [];
+  const column = (pattern: RegExp, fallback: number) => {
+    const index = names.findIndex((name) => pattern.test(name));
+    return index >= 0 ? index : fallback;
+  };
+  const ruleAt = names.findIndex((name) => /^rule/.test(name));
+  const domainAt = column(/^domain/, 1);
+  const masvsAt = column(/^masvs/, 2);
+  const platformAt = column(/^platform/, 3);
+  const androidAt = column(/^android/, 4);
+  const minCells = Math.max(9, names.length);
+  for (const row of table.filter((line) => /^\|\s*SEC-\d+/.test(line.trim()))) {
     const c = cells(row);
-    if (c.length < 9) continue;
+    if (c.length < minCells) continue;
     // Severity and confidence from the end, so a stray pipe in a cell cannot shift them.
     const severity = parseSecuritySeverity(c[c.length - 2]);
     if (!severity) continue;
-    const files = [...new Set(c.slice(4, -2).join(" ").match(SECURITY_FILE_REF) ?? [])].sort();
-    const domain = c[1].replace(/\*/g, "").trim();
+    const files = [...new Set(c.slice(androidAt, -2).join(" ").match(SECURITY_FILE_REF) ?? [])].sort();
+    const domain = (c[domainAt] ?? "").replace(/\*/g, "").trim();
+    const rule = ruleAt >= 0 ? parseRule(c[ruleAt] ?? "") : undefined;
     findings.push({
       id: c[0].replace(/\*/g, "").trim(),
       domain,
-      masvs: c[2].replace(/\*/g, "").trim(),
-      platform: c[3].replace(/\*/g, "").trim(),
+      masvs: (c[masvsAt] ?? "").replace(/\*/g, "").trim(),
+      platform: (c[platformAt] ?? "").replace(/\*/g, "").trim(),
       severity,
       confidence: parseConfidence(c[c.length - 1]),
       appWide: /app-?wide/i.test(domain),
       files,
       fingerprint: fingerprint(moduleKey, "security", `${domain} ${c[c.length - 3] ?? ""}`, files),
+      ...(rule ? { rule, locations: citedLocations(c.slice(androidAt, -2).join(" ")) } : {}),
     });
   }
   const rows = (name: string, id: RegExp) => (parts.get(name) ?? []).filter((line) => id.test(line.trim())).length;

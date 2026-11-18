@@ -719,6 +719,7 @@ function secSection(v: ModuleView): { html: string; critical: number; high: numb
   const ix = t
     ? {
         id: col(t, /^id$/i),
+        rule: col(t, /^rule/i),
         domain: col(t, /domain/i),
         masvs: col(t, /masvs/i),
         platform: col(t, /platform/i),
@@ -748,6 +749,8 @@ function secSection(v: ModuleView): { html: string; critical: number; high: numb
         `<span class="badge ${confClass(plain(r[ix!.confidence] ?? ""))}">${esc(plain(r[ix!.confidence] ?? "") || "—")}</span>`,
         ix!.masvs >= 0 ? `<span class="badge badge-potential">${esc(plain(r[ix!.masvs] ?? ""))}</span>` : "",
         ix!.platform >= 0 ? `<span class="badge badge-low">${esc(plain(r[ix!.platform] ?? ""))}</span>` : "",
+        // The security rule this finding maps to (docs/security-rules.md), when the report has the Rule column.
+        ix!.rule >= 0 && plain(r[ix!.rule] ?? "") ? `<span class="badge badge-potential" title="Security rule">${esc(plain(r[ix!.rule] ?? ""))}</span>` : "",
       ].join("");
       const impact = r[ix!.impact] ?? "";
       return card(

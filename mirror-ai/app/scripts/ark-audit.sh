@@ -22,6 +22,10 @@
 #                                      module and one App-wide Security section (off by default)
 #   <out_dir>/audit-skills.txt         read when MIRROR_AI_SECURITY is unset: a line "security" turns it
 #                                      on (an Ark flow writes it; override the path with MIRROR_AI_SKILLS_FILE)
+#   MIRROR_AI_RULES_REPO / _REF / _PATH   where the security pass reads its rules knowledge base
+#                                      (default: superapp-workspace mirror-ai-reports, docs/security-rules.md; the
+#                                      bundled prompts/references/security-rules.md when unreachable)
+#   MIRROR_AI_SECURITY_RULES           a rules file to use instead (skips the fetch)
 #   MIRROR_AI_MARKET                   recorded in the run log; the audit reads the market from code
 #   ANTHROPIC_API_KEY                  Batch API with a hard dollar cap (MIRROR_AI_BUDGET_USD, default 5);
 #                                      without it the signed-in `claude` CLI is used (subscription usage)
@@ -178,6 +182,43 @@ LOG="$OUT/mirror-ai-run.log"
   echo "security skill: ${MIRROR_AI_SECURITY:-off}"
 } > "$LOG"
 
+# The security pass maps every finding to a rule of the knowledge base in
+# superapp-workspace (docs/security-rules.md on the reports branch, mirror-ai-reports). It is fetched fresh each
+# run, so a merged rule applies to the next audit without a tool release. The
+# file and commit used are recorded in security-rules.source.txt, which publish
+# puts next to the report. A file the audit's own parser finds no rule in is
+# not used, so the recorded source is always the one the prompt got. When the workspace is unreachable the bundled copy is used.
+fetch_security_rules() {
+  [ -n "${MIRROR_AI_SECURITY:-}" ] || return 0
+  if [ -n "${MIRROR_AI_SECURITY_RULES:-}" ]; then
+    echo "security rules: ${MIRROR_AI_SECURITY_RULES_SOURCE:-$MIRROR_AI_SECURITY_RULES}" | tee -a "$LOG" >&2
+    return 0
+  fi
+  local repo="${MIRROR_AI_RULES_REPO:-${MIRROR_AI_REPORTS_REPO:-git@bitbucket.org:paytmteam/superapp-workspace.git}}"
+  local ref="${MIRROR_AI_RULES_REF:-${MIRROR_AI_REPORTS_BRANCH:-mirror-ai-reports}}" file="${MIRROR_AI_RULES_PATH:-docs/security-rules.md}" tmp sha
+  tmp="$(mktemp -d)"
+  local why=""
+  if ! timeout 120 git clone --quiet --depth 1 --filter=blob:none --no-checkout -b "$ref" "$repo" "$tmp/r" 2>/dev/null; then
+    why="superapp-workspace $ref not reachable"
+  elif ! git -C "$tmp/r" show "HEAD:$file" > "$OUT/security-rules.md" 2>/dev/null; then
+    why="$file not on superapp-workspace $ref"
+  elif [ "$(cd "$APP" && node --experimental-strip-types src/security-rules.ts count "$OUT/security-rules.md" 2>/dev/null || echo 0)" = "0" ]; then
+    why="$file on superapp-workspace $ref has no rules"
+  fi
+  if [ -z "$why" ]; then
+    sha="$(git -C "$tmp/r" rev-parse --short HEAD)"
+    MIRROR_AI_SECURITY_RULES_SOURCE="superapp-workspace $file @ $ref $sha"
+  else
+    cp "$APP/prompts/references/security-rules.md" "$OUT/security-rules.md"
+    MIRROR_AI_SECURITY_RULES_SOURCE="bundled prompts/references/security-rules.md ($why)"
+  fi
+  rm -rf "$tmp"
+  export MIRROR_AI_SECURITY_RULES="$OUT/security-rules.md" MIRROR_AI_SECURITY_RULES_SOURCE
+  printf '%s\n' "$MIRROR_AI_SECURITY_RULES_SOURCE" > "$OUT/security-rules.source.txt"
+  echo "security rules: $MIRROR_AI_SECURITY_RULES_SOURCE" | tee -a "$LOG" >&2
+}
+# Called directly, not in a pipe: a pipe would run it in a subshell and lose the exports.
+fetch_security_rules || true
 
 # A pipeline can drop an action that prints nothing for minutes (the scan only
 # reports every 10 requests), so say we are alive every 30 seconds.
@@ -186,6 +227,17 @@ HEARTBEAT=$!
 trap 'kill "$HEARTBEAT" 2>/dev/null || true' EXIT
 
 # Report UI: parity-report.html (and .pdf) use the module-tile / tab design rendered from parity-report.md.
+# Root causes no rule covered (Rule = NEW) become proposals for a person to review
+# and merge into docs/security-rules.md; the audit never edits the rules itself.
+write_rule_proposals() {
+  [ -n "${MIRROR_AI_SECURITY:-}" ] && [ -f "$OUT/parity-report.md" ] || return 0
+  local label=""
+  [ -f "$OUT/run.json" ] && label="$(node -e 'process.stdout.write(String(require(process.argv[1]).folder||""))' "$OUT/run.json" 2>/dev/null || true)"
+  rm -f "$OUT/proposed-security-rules.md"
+  node --experimental-strip-types src/security-rules.ts proposals "$OUT/parity-report.md" "$OUT/proposed-security-rules.md" "$label" 2>&1 | tee -a "$LOG" >&2 \
+    || echo "warning: proposed security rules not written" >&2
+}
+
 render_report_ui() {
   node --experimental-strip-types src/report-ui.ts "$OUT" --out "$OUT/parity-report.html" --md "$OUT/parity-report.ui.md" --pdf "$OUT/parity-report.pdf" 2>&1 | tee -a "$LOG" >&2 \
     || echo "warning: report UI not rendered; parity-report.html keeps the plain layout" >&2
@@ -255,6 +307,7 @@ if [ -n "$PREVIOUS_SCOPE" ]; then
     const t = s.totals;
     console.error(`${t.modules} module(s), ${t.incompleteModules} still incomplete, score ${s.score}, status ${s.status}, High ${t.high} (${t.highConfirmed} confirmed), Medium ${t.medium}, Low ${t.low}`);' "$OUT/summary.json" 2>&1 | tee -a "$LOG" >&2 || true
   render_report_ui
+  write_rule_proposals
   echo "Report: $OUT/parity-report.md" >&2
   fail_if_nothing_produced || exit 1
   exit 0
@@ -279,6 +332,7 @@ node --experimental-strip-types src/report-summary.ts "$OUT/parity-report.md" --
 node --experimental-strip-types src/run-meta.ts --out-dir "$OUT" --android "$ANDROID" --ios "$IOS" --scope "$RUN_SCOPE" --modules "$RUN_MODULES" 2>&1 | tee -a "$LOG" >&2 || echo "warning: run.json not written" >&2
 reserve_report_folder 2>&1 | tee -a "$LOG" >&2 || true
 render_report_ui
+write_rule_proposals
 
 echo "Report: $OUT/parity-report.md" >&2
 [ -f "$OUT/parity-report.html" ] && echo "HTML:   $OUT/parity-report.html" >&2

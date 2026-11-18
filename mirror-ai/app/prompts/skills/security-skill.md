@@ -186,10 +186,15 @@ section; the reader's page computes them.
 
 #### Security findings
 
-| ID | Domain | MASVS | Platform | Android Behavior | iOS Behavior | Impact | Severity | Confidence |
-|----|--------|-------|----------|------------------|--------------|--------|----------|------------|
+| ID | Rule | Domain | MASVS | Platform | Android Behavior | iOS Behavior | Impact | Severity | Confidence |
+|----|------|--------|-------|----------|------------------|--------------|--------|----------|------------|
 
 - **ID** — `SEC-01`, `SEC-02`, in order.
+- **Rule** — the ID of the security rule whose root cause this is (for example
+  `SR-CRYPTO-001`), from the *Security rules* list appended to this skill, or
+  `NEW` when no rule fits. Use exactly one ID. Never pick a rule because a past
+  ticket or report mentions it; the cited code must show its root cause. Two
+  rows with the same Rule and the same cited location are one finding.
 - **Domain** — the domain name from the table above. Add `App-wide` after it
   where the finding is not specific to this module.
 - **Android Behavior** / **iOS Behavior** — what the platform actually does, in
@@ -227,6 +232,25 @@ a few words with a citation, or `—` when the platform has nothing. Write
 - **Redacted value** — per the Redaction rule above.
 
 Write *None.* when nothing is found in the code read.
+
+#### Proposed rules
+
+One row for each `NEW` finding whose root cause could recur in other code or
+other apps. This is how the rules knowledge base learns; a person reviews every
+row before it becomes a rule.
+
+| ID | Proposed name | Category | Findings | Evidence | Closest existing rule |
+|----|---------------|----------|----------|----------|-----------------------|
+
+- **ID** — `PROPOSED-01`, in order.
+- **Proposed name** — the root cause in a few words, not the symptom.
+- **Findings** — the `SEC-xx` IDs in this section that it covers.
+- **Evidence** — at least one `path/File.kt:124` citation from the pinned
+  checkouts. A row without one is dropped.
+- **Closest existing rule** — the nearest `SR-…` ID and what it is missing, or
+  `none`.
+
+Write *None.* when every finding maps to an existing rule.
 
 #### Not assessed
 

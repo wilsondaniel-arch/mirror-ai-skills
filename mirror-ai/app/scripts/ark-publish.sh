@@ -114,7 +114,7 @@ publish_once() {
     DEST_FIXED=1
   fi
   mkdir -p "$DEST" reports/caribbean reports/panama reports/lcpr
-  for f in parity-report.md parity-report.ui.md parity-report.html parity-report.pdf summary.json; do
+  for f in parity-report.md parity-report.ui.md parity-report.html parity-report.pdf summary.json security-rules.source.txt proposed-security-rules.md; do
     [ -f "$ART/$f" ] && cp "$ART/$f" "$DEST/$f"
   done
   cp "$RUN_JSON" "$DEST/run.json"

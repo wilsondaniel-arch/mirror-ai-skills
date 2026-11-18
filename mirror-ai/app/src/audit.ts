@@ -36,6 +36,7 @@ import {
 } from "./codegraph.ts";
 import { auditModuleOnBudget, estimateBudgetAudit, type BudgetEstimate } from "./budget-audit.ts";
 import { isSecurityDef, passesFor, SECURITY_SKILL, securityEnabled } from "./security-scope.ts";
+import { loadSecurityRules, securityRulesPrompt } from "./security-rules.ts";
 const MAX_FILES_PER_SIDE = 40;
 /** Characters of source per platform, for the bundled fallback. ~4 chars a token. */
 const EVIDENCE_BUDGET = Number(process.env.MIRROR_AI_EVIDENCE_BUDGET) || 200_000;
@@ -331,8 +332,15 @@ function apiClient(): Anthropic {
   return client;
 }
 
-/** System prompt for a pass; api-skill includes the superapp-workspace workflow. */
+/**
+ * System prompt for a pass: api-skill includes the superapp-workspace workflow,
+ * and security-skill includes the security rules knowledge base.
+ */
 export function passSpec(request: AuditRequest, pass: AuditPass): string {
+  if (pass.id === SECURITY_SKILL) {
+    const rules = securityRulesPrompt(loadSecurityRules(request.projectRoot));
+    return rules ? [pass.spec, "---", rules].join("\n\n") : pass.spec;
+  }
   if (pass.id !== "api-skill") return pass.spec;
   const workflow = readApiDriftWorkflow(request.projectRoot);
   const parts = [
